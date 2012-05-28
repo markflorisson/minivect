@@ -33,9 +33,11 @@ class Specializer(ASTMapper):
     to copy the node and specialize the children.
     """
 
-    def __init__(self, context, specialization_name):
+    def __init__(self, context, specialization_name=None):
         super(Specializer, self).__init__(context)
-        self.specialization_name = specialization_name
+        if specialization_name is not None:
+            self.specialization_name = specialization_name
+
         self.variables = {}
         self.error_handlers = []
 
@@ -59,6 +61,8 @@ class Specializer(ASTMapper):
         return self.visit_Node(node)
 
 class StridedSpecializer(Specializer):
+
+    specialization_name = "strided"
 
     def visit_FunctionNode(self, node):
         node.specialization_name = self.specialization_name
@@ -125,19 +129,31 @@ class StridedSpecializer(Specializer):
 
 class ContigSpecializer(StridedSpecializer):
 
+    specialization_name = "contig"
+
     def visit_FunctionNode(self, node):
         b = self.astbuilder
 
-        shapelist = node.shapevar
-        shapevar = b.temp(node.shapevar.base_type.type)
-        compute_shape = b.reduce(shapelist, b.mul, output=shapevar,
-                                 length=b.constant(node.ndim))
-        node.shapevar = shapevar
-        node.body = node.stats(compute_shape, node.body)
+        # compute the product of the shape and insert it into the function body
+        extents = [b.index(node.shape, b.constant(i))
+                       for i in range(node.ndim)]
+        node.shape = b.temp(node.shape.type.base_type)
+        init_shape = b.assign(node.shape, reduce(b.mul, extents))
+        node.body = b.stats(init_shape, node.body)
+
         return super(ContigSpecializer, self).visit_FunctionNode(node)
+
+    def visit_NDIterate(self, node):
+        node = self.astbuilder.for_range_upwards(
+                        node.body, upper=self.function.shape)
+        self.target = node.target
+        self.visitchildren(node)
+        return node
 
     def visit_StridePointer(self, node):
         return None
 
-    def visit_Variable(self, node):
-        return super(ContigSpecializer, self).visit_Variable(node)
+    def _element_location(self, node):
+        data_pointer = self.astbuilder.data_pointer(node)
+        return self.astbuilder.index(data_pointer, self.target)
+

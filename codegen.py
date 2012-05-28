@@ -44,6 +44,7 @@ class CCodeGen(CodeGen):
         proto = "static int %s(%s)" % (name, ", ".join(args))
         code.proto_code.putln(proto + ';')
         code.putln("%s {" % proto)
+        code.declaration_point = code.insertion_point()
         self.visitchildren(node)
         code.putln("}")
 
@@ -94,7 +95,7 @@ class CCodeGen(CodeGen):
         name = self.code.mangle(node.name)
         if name not in self.declared_temps:
             self.declared_temps.add(name)
-            code = self.code.declaration_levels[-1]
+            code = self.code.declaration_point
             code.putln("%s %s;" % (self.context.declare_type(node.type), name))
 
         return name
