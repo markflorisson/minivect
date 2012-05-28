@@ -1,3 +1,7 @@
+"""
+Specializers for various sorts of data layouts and memory alignments.
+"""
+
 import copy
 
 import minivisitor

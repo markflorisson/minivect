@@ -1,3 +1,10 @@
+"""
+This module provides the AST. Subclass Context and override the various
+methods to allow minivect visitors over the AST, to promote and map types,
+etc. Subclass and override ASTBuilder's method to provide alternative
+AST nodes or different implementations.
+"""
+
 import copy
 import types
 

@@ -1,3 +1,8 @@
+"""
+Code writers and formatters. Subclass CodeWriter to suit the needs of
+a certain code generator backend.
+"""
+
 try:
     from Cython.Compiler import Tempita as tempita
 except ImportError:
