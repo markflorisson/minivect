@@ -1,0 +1,15 @@
+*.pyc
+*.pyo
+__pycache__
+*.so
+*.o
+.gitrev
+.coverage
+*.orig
+*.rej
+*.dep
+*.swp
+*~
+
+tags
+TAGS
