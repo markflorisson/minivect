@@ -141,22 +141,18 @@ class NumericType(NamedType):
 class IntType(NumericType):
     is_int = True
     name = "int"
-    rank = 4
 
 class FloatType(NumericType):
     is_float = True
     name = "float"
-    rank = 9
 
 class DoubleType(NumericType):
     is_double = True
     name = "double"
-    rank = 10
 
 class Py_ssize_t_Type(NumericType):
     is_py_ssize_t = True
     name = "Py_ssize_t"
-    rank = 10
 
 class CharType(NumericType):
     is_char = True

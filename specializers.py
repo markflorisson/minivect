@@ -63,7 +63,7 @@ class StridedSpecializer(Specializer):
     def visit_FunctionNode(self, node):
         node.specialization_name = self.specialization_name
         b = self.astbuilder
-        node.body = [node.body, b.return_(node.success_value)]
+        node.body = b.stats(node.body, b.return_(node.success_value))
         self.function = node
         self.visitchildren(node)
         return node
@@ -80,7 +80,6 @@ class StridedSpecializer(Specializer):
             self.indices.append(body.target)
 
         self.visitchildren(body)
-        assert body.init.lhs is not None
         return body
 
     def visit_ForNode(self, node):
@@ -89,18 +88,21 @@ class StridedSpecializer(Specializer):
         self.visitchildren(node)
         return node
 
-    def visit_Variable(self, node):
+    def _element_location(self, node):
         b = self.astbuilder
+        ndim = node.type.ndim
+        indices = [b.mul(index, b.stride(node, i))
+                   for i, index in enumerate(self.indices[-ndim:])]
+        pointer = b.cast(b.data_pointer(node),
+                         minitypes.c_char_t.pointer())
+        node = b.index_multiple(pointer, indices,
+                                dest_pointer_type=node.type.dtype.pointer())
+        self.visitchildren(node)
+        return node
+
+    def visit_Variable(self, node):
         if node.name in self.function.args and node.type.is_array:
-            ndim = node.type.ndim
-            indices = [b.mul(index, b.stride(node, i))
-                           for i, index in enumerate(self.indices[-ndim:])]
-            pointer = b.cast(b.data_pointer(node),
-                             minitypes.c_char_t.pointer())
-            node = b.index_multiple(pointer, indices,
-                                    dest_pointer_type=node.type.dtype.pointer())
-            self.visitchildren(node)
-            return node
+            return self._element_location(node)
 
         return super(StridedSpecializer, self).visit_Variable(node)
 
@@ -120,3 +122,22 @@ class StridedSpecializer(Specializer):
         self.visitchildren(node)
         self.error_handlers.pop()
         return node
+
+class ContigSpecializer(StridedSpecializer):
+
+    def visit_FunctionNode(self, node):
+        b = self.astbuilder
+
+        shapelist = node.shapevar
+        shapevar = b.temp(node.shapevar.base_type.type)
+        compute_shape = b.reduce(shapelist, b.mul, output=shapevar,
+                                 length=b.constant(node.ndim))
+        node.shapevar = shapevar
+        node.body = node.stats(compute_shape, node.body)
+        return super(ContigSpecializer, self).visit_FunctionNode(node)
+
+    def visit_StridePointer(self, node):
+        return None
+
+    def visit_Variable(self, node):
+        return super(ContigSpecializer, self).visit_Variable(node)

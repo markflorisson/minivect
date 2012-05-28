@@ -138,8 +138,15 @@ class ASTBuilder(object):
         result.target = temp
         return result
 
-    def statlist(self, *statements):
-        return StatListNode(self.pos, statements)
+    def stats(self, *statements):
+        stats = []
+        for stat in statements:
+            if stat.is_statlist:
+                stats.extend(stat.stats)
+            else:
+                stats.append(stat)
+
+        return StatListNode(self.pos, stats)
 
     def if_(self, cond, body):
         return IfNode(self.pos, cond, body)
@@ -166,7 +173,10 @@ class ASTBuilder(object):
         return self.binop(type, '*', lhs, rhs)
 
     def index(self, pointer, index, dest_pointer_type=None):
-        return self.index_multiple(pointer, [index], dest_pointer_type)
+        if dest_pointer_type:
+            return self.index_multiple(pointer, [index], dest_pointer_type)
+        return SingleIndexNode(self.pos, pointer.type.base_type,
+                               pointer, index)
 
     def index_multiple(self, pointer, indices, dest_pointer_type=None):
         for index in indices:
@@ -260,6 +270,7 @@ class Node(miniutils.ComparableObjectMixin):
 
     is_expression = False
 
+    is_statlist = False
     is_scalar = False
     is_constant = False
     is_assignment = False
@@ -379,6 +390,7 @@ class ForNode(Node):
 
 class StatListNode(Node):
     child_attrs = ['stats']
+    is_statlist = True
 
     def __init__(self, pos, statements):
         super(StatListNode, self).__init__(pos)
@@ -461,6 +473,9 @@ class CastNode(SingleOperandNode):
 
 class DereferenceNode(SingleOperandNode):
     is_dereference = True
+
+class SingleIndexNode(BinaryOperationNode):
+    is_index = True
 
 class ConstantNode(ExprNode):
     is_constant = True

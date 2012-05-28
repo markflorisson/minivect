@@ -52,6 +52,10 @@ class CCodeGen(CodeGen):
         return ", ".join("%s %s" % (typename(v.type), self.visit(v))
                              for v in node.variables)
 
+    def visit_StatListNode(self, node):
+        self.visitchildren(node)
+        return node
+
     def visit_ForNode(self, node):
         code = self.code
 
@@ -107,6 +111,9 @@ class CCodeGen(CodeGen):
 
     def visit_DereferenceNode(self, node):
         return "(*%s)" % self.visit(node.operand)
+
+    def visit_SingleIndexNode(self, node):
+        return "(%s[%s])" % self.results(node.lhs, node.rhs)
 
     def visit_ArrayAttribute(self, node):
         return node.name
