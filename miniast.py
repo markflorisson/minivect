@@ -28,6 +28,8 @@ class Context(object):
     codewriter_cls = minicode.CodeWriter
     codeformatter_cls = minicode.CodeFormatter
 
+    specializer_mixin_cls = None
+
     def __init__(self, astbuilder=None, typemapper=None):
         self.astbuilder = astbuilder or ASTBuilder(self)
         self.typemapper = typemapper or minitypes.TypeMapper()
@@ -35,9 +37,14 @@ class Context(object):
     def run_opaque(self, astmapper, opaque_ast, specializers):
         return self.run(astmapper.visit(opaque_ast), specializers)
 
-    def run(self, ast, specializers):
-        for specializer in specializers:
-            specialized_ast = specializer.visit(ast)
+    def run(self, ast, specializer_classes):
+        for specializer_class in specializer_classes:
+            if self.specializer_mixin_cls:
+                cls1, cls2 = specializer_class, self.specializer_mixin_cls
+                name = "%s_%s" % (cls1.__name__, cls2.__name__)
+                specializer_class = type(name, (cls1, cls2), {})
+
+            specialized_ast = specializer_class(self).visit(ast)
             #T = minivisitor.PrintTree(self)
             #T.visit(specialized_ast)
             codewriter = self.codewriter_cls(self)
@@ -257,10 +264,10 @@ class ASTBuilder(object):
     def error_handler(self, node):
         return ErrorHandler(self.pos, node, self.label('error'))
 
-    def wrap(self, opaque_node):
+    def wrap(self, opaque_node, **kwds):
         return NodeWrapper(self.context.getpos(opaque_node),
                            self.context.gettype(opaque_node),
-                           opaque_node)
+                           opaque_node, **kwds)
 
 class Position(object):
     def __init__(self, filename, line, col):
@@ -412,9 +419,10 @@ class NodeWrapper(ExprNode):
 
     child_attrs = []
 
-    def __init__(self, pos, type, opaque_node):
+    def __init__(self, pos, type, opaque_node, **kwds):
         super(NodeWrapper, self).__init__(pos, type)
         self.opaque_node = opaque_node
+        vars(self).update(kwds)
 
     def __hash__(self):
         return hash(self.opaque_node)
