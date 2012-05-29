@@ -26,6 +26,16 @@ class CodeGen(minivisitor.TreeVisitor):
             return
         return self.visit(node)
 
+class CodeGenCleanup(CodeGen):
+    def visit_Node(self, node):
+        self.visitchildren(node)
+
+    def visit_ForNode(self, node):
+        # The body has already been disposed of
+        self.visit(node.init)
+        self.visit(node.condition)
+        self.visit(node.step)
+
 class CCodeGen(CodeGen):
 
     label_counter = 0
@@ -64,19 +74,28 @@ class CCodeGen(CodeGen):
         if node.body.may_error(self.context):
             error_handler = self.context.error_handler(code)
 
-        if not node.is_tiled:
-            code.declaration_levels.append(code.insertion_point())
-            code.loop_levels.append(code.insertion_point())
-
         exprs = self.results(node.init, node.condition, node.step)
         code.putln("for (%s; %s; %s) {" % exprs)
+
+        if not node.is_tiled:
+            self.code.declaration_levels.append(code.insertion_point())
+            self.code.loop_levels.append(code.insertion_point())
+
         self.visit(node.init)
         self.visit(node.body)
 
         if error_handler:
             error_handler.catch_here(code)
-            node.disposal_point = code.insertion_point()
+            disposal_point = code.insertion_point()
             error_handler.cascade(code)
+        else:
+            disposal_point = code
+
+        self.context.generate_disposal_code(code, node.body)
+
+        if not node.is_tiled:
+            self.code.declaration_levels.pop()
+            self.code.loop_levels.pop()
 
         code.putln("}")
 

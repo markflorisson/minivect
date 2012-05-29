@@ -24,6 +24,7 @@ class Context(object):
     """
 
     codegen_cls = codegen.CodeGen
+    cleanup_codegen_cls = codegen.CodeGenCleanup
     codewriter_cls = minicode.CodeWriter
     codeformatter_cls = minicode.CodeFormatter
 
@@ -44,6 +45,10 @@ class Context(object):
             visitor.visit(specialized_ast)
             yield (specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
+
+    def generate_disposal_code(self, code, node):
+        transform = self.cleanup_codegen_cls(self, code)
+        transform.visit(node)
 
     #
     ### Override in subclasses where needed
@@ -254,7 +259,7 @@ class ASTBuilder(object):
 
     def wrap(self, opaque_node):
         return NodeWrapper(self.context.getpos(opaque_node),
-                           self.context.gettype(opague_node),
+                           self.context.gettype(opaque_node),
                            opaque_node)
 
 class Position(object):

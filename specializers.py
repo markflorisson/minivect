@@ -16,9 +16,9 @@ class ASTMapper(minivisitor.VisitorTransform):
     def getpos(self, opaque_node):
         return self.context.getpos(opaque_node)
 
-    def map_type(self, opaque_node):
+    def map_type(self, opaque_node, **kwds):
         return self.context.typemapper.map_type(
-                        self.context.gettype(opaque_node))
+                        self.context.gettype(opaque_node), **kwds)
 
     def visit(self, node, *args):
         prev = self.astbuilder.pos
