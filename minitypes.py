@@ -90,6 +90,9 @@ class Type(miniutils.ComparableObjectMixin):
 
         return h
 
+    def tostring(self, context):
+        return str(self)
+
 class ArrayType(Type):
 
     is_array = True
@@ -117,8 +120,8 @@ class PointerType(Type):
     def __init__(self, base_type):
         self.base_type = base_type
 
-    def __str__(self):
-        return "%s *" % self.base_type
+    def tostring(self, context):
+        return "%s *" % context.declare_type(self.base_type)
 
 class TypeWrapper(Type):
     is_typewrapper = True

@@ -71,7 +71,7 @@ class Context(object):
 
     def declare_type(self, type):
         "Return a declaration for a type"
-        return str(type)
+        return type.tostring(self)
 
 class CContext(Context):
 
