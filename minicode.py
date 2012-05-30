@@ -34,8 +34,6 @@ class CodeWriter(object):
 
         self.loop_levels = []
         self.tiled_loop_levels = []
-        self.cleanup_levels = []
-        self.cleanup_labels = []
         self.declaration_levels = []
 
     @classmethod
@@ -43,7 +41,11 @@ class CodeWriter(object):
         return cls(context, buffer)
 
     def insertion_point(self):
-        return self.clone(self, self.context, self.buffer.insertion_point())
+        result = self.clone(self, self.context, self.buffer.insertion_point())
+        result.loop_levels = list(self.loop_levels)
+        result.tiled_loop_levels = list(self.tiled_loop_levels)
+        result.declaration_levels = list(self.declaration_levels)
+        return result
 
     def write(self, value):
         self.buffer.output.append(value)

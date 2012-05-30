@@ -63,8 +63,13 @@ class Type(miniutils.ComparableObjectMixin):
     is_int = False
     is_float = False
     is_double = False
+    is_c_string = True
+    is_object = False
 
     subtypes = []
+
+    def __init__(self, **kwds):
+        vars(self).update(kwds)
 
     def pointer(self):
         return PointerType(self)
@@ -138,6 +143,9 @@ class BoolType(NamedType):
     is_bool = True
     name = "bool"
 
+    def tostring(self, context):
+        return "int"
+
 class NumericType(NamedType):
     is_numeric = True
 
@@ -161,6 +169,21 @@ class CharType(NumericType):
     is_char = True
     name = "char"
 
+class CStringType(Type):
+    is_c_string = True
+
+    def __str__(self):
+        return "const char *"
+
+class ObjectType(Type):
+    is_object = True
+
+class FunctionType(Type):
+    subtypes = ['return_type', 'args']
+
 Py_ssize_t = Py_ssize_t_Type()
 c_char_t = CharType()
+int_type = IntType()
 bool = BoolType()
+c_string_type = CStringType()
+object_type = ObjectType()

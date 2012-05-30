@@ -45,8 +45,6 @@ class Context(object):
                 specializer_class = type(name, (cls1, cls2), {})
 
             specialized_ast = specializer_class(self).visit(ast)
-            #T = minivisitor.PrintTree(self)
-            #T.visit(specialized_ast)
             codewriter = self.codewriter_cls(self)
             visitor = self.codegen_cls(self, codewriter)
             visitor.visit(specialized_ast)
@@ -108,31 +106,47 @@ class ASTBuilder(object):
 
     def infer_type(self, value):
         if isinstance(value, (int, long)):
-            return minitypes.IntType
+            return minitypes.IntType()
         elif isinstance(value, float):
-            return minitypes.FloatType
+            return minitypes.FloatType()
+        elif isinstance(value, str):
+            return minitypes.CStringType()
         else:
             raise minierror.InferTypeError()
 
-    def function(self, name, body, arguments, shapevar):
+    def function(self, name, body, arguments, shapevar, posinfo=None):
         """
         arguments: [FunctionArgument]
         shapevar: the shape Variable. Will be prepended as
                   an argument to `arguments`
         """
         arguments.insert(0, self.funcarg(shapevar))
+        arguments.insert(1, posinfo)
         body = NDIterate(self.pos, body)
         return FunctionNode(self.pos, name, body, arguments, shapevar,
+                            posinfo,
                             error_value=self.constant(-1),
                             success_value=self.constant(0))
 
-    def funcarg(self, variable):
-        if variable.type.is_array:
-            variables = [self.data_pointer(variable),
-                         self.stridesvar(variable)]
-        else:
-            variables = [variable]
-        return FunctionArgument(self.pos, variable, variables)
+    def funcarg(self, variable, *variables):
+        if not variables:
+            if variable.type.is_array:
+                variables = [self.data_pointer(variable),
+                             self.stridesvar(variable)]
+            else:
+                variables = [variable]
+
+        return FunctionArgument(self.pos, variable, list(variables))
+
+    def funccall(self, name_or_pointer, args):
+        type = name_or_pointer.type
+        if name_or_pointer.is_pointer:
+            type = name_or_pointer.type.base_type
+        return FuncCallNode(self.pos, type=type,
+                            name_or_pointer=name_or_pointer, args=args)
+
+    def funcname(self, type, name):
+        return FuncNameNode(self.pos, type=type, name=name)
 
     def for_(self, body, init, condition, step, is_tiled=False):
         return ForNode(self.pos, init, condition, step, body, is_tiled)
@@ -160,8 +174,11 @@ class ASTBuilder(object):
 
         return StatListNode(self.pos, stats)
 
+    def expr_stat(self, expr):
+        return ExprStatNode(expr.pos, expr=expr)
+
     def if_(self, cond, body):
-        return IfNode(self.pos, cond, body)
+        return IfNode(self.pos, cond=cond, body=body)
 
     def binop(self, type, op, lhs, rhs):
         return BinopNode(self.pos, type, op, lhs, rhs)
@@ -206,7 +223,7 @@ class ASTBuilder(object):
         return AssignmentExpr(self.pos, node.type, node, value)
 
     def assign(self, node, value):
-        return AssignmentNode(self.pos, None, self.assign_expr(node, value))
+        return self.expr_stat(self.assign_expr(node, value))
 
     def dereference(self, pointer):
         return DereferenceNode(self.pos, pointer.type.base_type, pointer)
@@ -261,8 +278,16 @@ class ASTBuilder(object):
     def label(self, name):
         return LabelNode(self.pos, name)
 
+    def raise_exc(self, posinfo, exc_var, msg_val, fmt_args):
+        return RaiseNode(self.pos, posinfo, exc_var, msg_val, fmt_args)
+
+    def posinfo(self, posvars):
+        return PositionInfoNode(self.pos, posinfo=posvars)
+
     def error_handler(self, node):
-        return ErrorHandler(self.pos, node, self.label('error'))
+        return ErrorHandler(self.pos, body=node,
+                            error_label=self.label('error'),
+                            cleanup_label=self.label('cleanup'))
 
     def wrap(self, opaque_node, **kwds):
         return NodeWrapper(self.context.getpos(opaque_node),
@@ -298,8 +323,9 @@ class Node(miniutils.ComparableObjectMixin):
 
     child_attrs = []
 
-    def __init__(self, pos):
+    def __init__(self, pos, **kwds):
         self.pos = pos
+        vars(self).update(kwds)
 
     def may_error(self, context):
         """
@@ -309,6 +335,10 @@ class Node(miniutils.ComparableObjectMixin):
         visitor = minivisitor.MayErrorVisitor(context)
         visitor.visit(self)
         return visitor.may_error
+
+    def print_tree(self, context):
+        visitor = minivisitor.PrintTree(context)
+        visitor.visit(self)
 
     @property
     def comparison_objects(self):
@@ -339,25 +369,54 @@ class ExprNode(Node):
 
 class FunctionNode(Node):
     child_attrs = ['body', 'arguments']
-    def __init__(self, pos, name, body, arguments, shape,
+    def __init__(self, pos, name, body, arguments, shape, posinfo,
                  error_value, success_value):
         super(FunctionNode, self).__init__(pos)
         self.name = name
         self.body = body
         self.arguments = arguments
         self.shape = shape
+        self.posinfo = posinfo
         self.error_value = error_value
         self.success_value = success_value
 
         self.args = dict((v.name, v) for v in arguments)
         self.ndim = max(arg.type.ndim for arg in arguments
-                                          if arg.type.is_array)
+                                          if arg.type and arg.type.is_array)
+
+
+class FuncCallNode(Node):
+    """
+    Call a function given a pointer or its name (FuncNameNode)
+    """
+    child_attrs = ['name_or_pointer', 'args']
+
+class FuncNameNode(Node):
+    """
+    Load a function given its C linkage name.
+    """
 
 class ReturnNode(Node):
     child_attrs = ['operand']
     def __init__(self, pos, operand):
         super(ReturnNode, self).__init__(pos)
         self.operand = operand
+
+class RaiseNode(Node):
+    "Raise a Python exception. The callee must hold the GIL."
+
+    child_attrs = ['posinfo', 'exc_var', 'msg_val', 'fmt_args']
+
+    def __init__(self, pos, posinfo, exc_var, msg_val, fmt_args):
+        super(RaiseNode, self).__init__(pos)
+        self.posinfo = posinfo
+        self.exc_var, self.msg_val, self.fmt_args = (exc_var, msg_val, fmt_args)
+
+class PositionInfoNode(Node):
+    """
+    Node that holds a position of where an error occurred. This position
+    needs to be returned to the callee if the callee supports it.
+    """
 
 class FunctionArgument(ExprNode):
     """
@@ -400,6 +459,9 @@ class ForNode(Node):
         self.body = body
         self.is_tiled = False
 
+class IfNode(Node):
+    child_attrs = ['cond', 'body']
+
 class StatListNode(Node):
     child_attrs = ['stats']
     is_statlist = True
@@ -407,6 +469,9 @@ class StatListNode(Node):
     def __init__(self, pos, statements):
         super(StatListNode, self).__init__(pos)
         self.stats = statements
+
+class ExprStatNode(Node):
+    child_attrs = ['expr']
 
 class NodeWrapper(ExprNode):
     """
@@ -461,10 +526,6 @@ class SingleOperandNode(ExprNode):
     def __init__(self, pos, type, operand):
         super(SingleOperandNode, self).__init__(pos, type)
         self.operand = operand
-
-class AssignmentNode(SingleOperandNode):
-    is_assignment = True
-    is_expression = False
 
 class AssignmentExpr(BinaryOperationNode):
     is_assignment = True
@@ -525,19 +586,38 @@ class TempNode(Variable):
     is_temp = True
 
 class ErrorHandler(Node):
-    child_attrs = ['error_var_init', 'body', 'error_target_label', 'error_set',
-                   'cleanup', 'cascade']
+    """
+    A node to handle errors. If there is an error handler in the outer scope,
+    the specializer will first make this error handler generate disposal code
+    for the wrapped AST body, and then jump to the error label of the parent
+    error handler. At the outermost (function) level, the error handler simply
+    returns an error indication.
+
+        error_label: point to jump to in case of an error
+        cleanup_label: point to jump to in the normal case
+
+    It generates the following:
+
+        error_var = 0;
+        ...
+        goto cleanup;
+      error:
+        error_var = 1;
+      cleanup:
+        ...
+        if (error_var)
+            goto outer_error_label;
+    """
+    child_attrs = ['error_var_init', 'body', 'cleanup_jump',
+                   'error_target_label', 'error_set', 'cleanup_target_label',
+                   'cascade']
 
     error_var_init = None
+    cleanup_jump = None
     error_target_label = None
     error_set = None
-    cleanup = None
+    cleanup_target_label = None
     cascade = None
-
-    def __init__(self, pos, body, error_label):
-        super(ErrorHandler, self).__init__(pos)
-        self.body = body
-        self.error_label = error_label
 
 class JumpNode(Node):
     child_attrs = ['label']

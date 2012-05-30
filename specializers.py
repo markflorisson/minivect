@@ -22,7 +22,7 @@ class ASTMapper(minivisitor.VisitorTransform):
 
     def visit(self, node, *args):
         prev = self.astbuilder.pos
-        self.astbuilder.pos = self.context.getpos(node)
+        self.astbuilder.pos = node.pos
         result = super(ASTMapper, self).visit(node)
         self.astbuilder.pos = prev
         return result
@@ -65,10 +65,18 @@ class StridedSpecializer(Specializer):
     specialization_name = "strided"
 
     def visit_FunctionNode(self, node):
+        # set this so bad people can specialize during code generation time
+        node.specializer = self
         node.specialization_name = self.specialization_name
-        b = self.astbuilder
-        node.body = b.stats(node.body, b.return_(node.success_value))
         self.function = node
+
+        b = self.astbuilder
+
+        if node.body.may_error(self.context):
+            node.body = b.error_handler(node.body)
+
+        node.body = b.stats(node.body, b.return_(node.success_value))
+
         self.visitchildren(node)
         return node
 
@@ -76,15 +84,14 @@ class StridedSpecializer(Specializer):
         b = self.astbuilder
 
         self.indices = []
-        body = node.body
+        node = node.body
 
         for i in range(self.function.ndim - 1, -1, -1):
             upper = b.shape_index(i, self.function)
-            body = b.for_range_upwards(body, upper=upper)
-            self.indices.append(body.target)
+            node = b.for_range_upwards(node, upper=upper)
+            self.indices.append(node.target)
 
-        self.visitchildren(body)
-        return body
+        return self.visit(node)
 
     def visit_ForNode(self, node):
         if node.body.may_error(self.context):
@@ -110,17 +117,47 @@ class StridedSpecializer(Specializer):
 
         return super(StridedSpecializer, self).visit_Variable(node)
 
+    def visit_LabelNode(self, node):
+        # don't copy our labels
+        return node
+
+    def visit_PositionInfoNode(self, node):
+        b = self.astbuidler
+
+        posinfo = self.function.posinfo
+        if posinfo:
+            pos = node.posinfo
+            return b.stats(
+                b.assign(b.deref(posinfo.filename), b.constant(pos.filename)),
+                b.assign(b.deref(posinfo.lineno), b.constant(pos.lineno)),
+                b.assign(b.deref(posinfo.column), b.constant(pos.column)))
+
+    def visit_RaiseNode(self, node):
+        from minitypes import FunctionType, object_type
+        b = self.astbuilder
+
+        functype = FunctionType(return_type=object_type,
+                                args=[object_type] * (2 + len(node.fmt_args)))
+        return b.expr_stat(
+            b.funccall(b.funcname(functype, "PyErr_Format"),
+                       [node.exc_var, node.msg_val] + node.fmt_args))
+
     def visit_ErrorHandler(self, node):
         b = self.astbuilder
+
+        node.error_variable = b.temp(minitypes.bool)
+        node.error_var_init = b.assign(node.error_variable, 0)
+        node.cleanup_jump = b.jump(node.cleanup_label)
+        node.error_target_label = b.jump_target(node.error_label)
+        node.cleanup_target_label = b.jump_target(node.cleanup_label)
+        node.error_set = b.assign(node.error_variable, 1)
+
         if self.error_handlers:
-            node.error_variable = b.temp(minitypes.bool)
-            node.error_var_init = b.assign(node.error_variable, 0)
-            node.error_target_label = b.jump_target(node.error_label)
-            node.error_set = b.assign(node.error_variable, 1)
-            node.cascade = b.if_(node.error_variable,
-                                 b.jump(self.error_handlers[-1].label))
+            cascade_code = b.jump(self.error_handlers[-1].error_label)
         else:
-            node.cascade = b.return_(self.function.error_value)
+            cascade_code = b.return_(self.function.error_value)
+
+        node.cascade = b.if_(node.error_variable, cascade_code)
 
         self.error_handlers.append(node)
         self.visitchildren(node)

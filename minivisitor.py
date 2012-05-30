@@ -108,7 +108,13 @@ class MayErrorVisitor(TreeVisitor):
         self.visitchildren(node)
 
     def visit_NodeWrapper(self, node):
-        may_error = self.context.may_error(node.opaque_node)
+        self.may_error = (self.may_error or
+                          self.context.may_error(node.opaque_node))
+
+    def visit_ForNode(self, node):
+        self.visit(node.init)
+        self.visit(node.condition)
+        self.visit(node.step)
 
 class PrintTree(TreeVisitor):
     indent = 0
