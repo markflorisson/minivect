@@ -71,10 +71,17 @@ class CCodeGen(CodeGen):
         code.declaration_levels.pop()
         code.putln("}")
 
-    def visit_FunctionArgument(self, node):
+    def _argument_variables(self, variables):
         typename = self.context.declare_type
         return ", ".join("%s %s" % (typename(v.type), self.visit(v))
-                             for v in node.variables)
+                             for v in variables if v is not None)
+
+    def visit_FunctionArgument(self, node):
+        return self._argument_variables(node.variables)
+
+    def visit_ArrayFunctionArgument(self, node):
+        return self._argument_variables([node.data_pointer,
+                                         node.strides_pointer])
 
     def visit_StatListNode(self, node):
         self.visitchildren(node)
@@ -113,6 +120,9 @@ class CCodeGen(CodeGen):
 
     def visit_FuncNameNode(self, node):
         return node.name
+
+    def visit_FuncRefNode(self, node):
+        return node.function.mangled_name
 
     def visit_ReturnNode(self, node):
         self.code.putln("return %s;" % self.results(node.operand))

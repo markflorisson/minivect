@@ -128,6 +128,17 @@ class PointerType(Type):
     def tostring(self, context):
         return "%s *" % context.declare_type(self.base_type)
 
+class CArrayType(Type):
+    is_carray = True
+    subtypes = ['base_type']
+
+    def __init__(self, base_type, size):
+        self.base_type = base_type
+        self.size = size
+
+    def tostring(self, context):
+        return "%s[%d]" % (context.declare_type(self.base_type), self.length)
+
 class TypeWrapper(Type):
     is_typewrapper = True
     subtypes = ['opaque_type']

@@ -130,13 +130,16 @@ class ASTBuilder(object):
 
     def funcarg(self, variable, *variables):
         if not variables:
-            if variable.type.is_array:
-                variables = [self.data_pointer(variable),
-                             self.stridesvar(variable)]
-            else:
-                variables = [variable]
-
+            variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))
+
+    def array_funcarg(self, variable):
+        return ArrayFunctionArgument(
+                self.pos, variable.type, name=variable.name,
+                variable=variable,
+                data_pointer=self.data_pointer(variable),
+                #shape_pointer=self.shapevar(variable),
+                strides_pointer=self.stridesvar(variable))
 
     def funccall(self, name_or_pointer, args):
         type = name_or_pointer.type
@@ -147,6 +150,9 @@ class ASTBuilder(object):
 
     def funcname(self, type, name):
         return FuncNameNode(self.pos, type=type, name=name)
+
+    def funcref(self, function):
+        return FuncRefNode(self.pos, type=function.type, function=function)
 
     def for_(self, body, init, condition, step, is_tiled=False):
         return ForNode(self.pos, init, condition, step, body, is_tiled)
@@ -319,6 +325,9 @@ class Node(miniutils.ComparableObjectMixin):
     is_jump = False
     is_label = False
 
+    is_funcarg = False
+    is_array_funcarg = False
+
     is_specialized = False
 
     child_attrs = []
@@ -363,8 +372,8 @@ class Node(miniutils.ComparableObjectMixin):
 class ExprNode(Node):
     is_expression = True
 
-    def __init__(self, pos, type):
-        super(ExprNode, self).__init__(pos)
+    def __init__(self, pos, type, **kwds):
+        super(ExprNode, self).__init__(pos, **kwds)
         self.type = type
 
 class FunctionNode(Node):
@@ -394,6 +403,11 @@ class FuncCallNode(Node):
 class FuncNameNode(Node):
     """
     Load a function given its C linkage name.
+    """
+
+class FuncRefNode(Node):
+    """
+    Refer to a function given a FunctionNode.
     """
 
 class ReturnNode(Node):
@@ -427,6 +441,7 @@ class FunctionArgument(ExprNode):
         variables: the actual variables this operand should be unpacked into
     """
     child_attrs = ['variables']
+    if_funcarg = True
 
     def __init__(self, pos, variable, variables):
         super(FunctionArgument, self).__init__(pos, variable.type)
@@ -434,6 +449,10 @@ class FunctionArgument(ExprNode):
         self.variable = variable
         self.name = variable.name
         self.args = dict((v.name, v) for v in variables)
+
+class ArrayFunctionArgument(ExprNode):
+    child_attrs = ['data_pointer', 'strides_pointer']
+    is_array_funcarg = True
 
 class NDIterate(Node):
 

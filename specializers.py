@@ -5,6 +5,7 @@ Specializers for various sorts of data layouts and memory alignments.
 import copy
 
 import minivisitor
+import miniutils
 import minitypes
 
 class ASTMapper(minivisitor.VisitorTransform):
@@ -55,15 +56,6 @@ class Specializer(ASTMapper):
         self.visitchildren(node)
         return node
 
-    def visit_Variable(self, node):
-        if node.name not in self.variables:
-            self.variables[node.name] = node
-        return self.visit_Node(node)
-
-class StridedSpecializer(Specializer):
-
-    specialization_name = "strided"
-
     def visit_FunctionNode(self, node):
         # set this so bad people can specialize during code generation time
         node.specializer = self
@@ -80,42 +72,16 @@ class StridedSpecializer(Specializer):
         self.visitchildren(node)
         return node
 
-    def visit_NDIterate(self, node):
-        b = self.astbuilder
-
-        self.indices = []
-        node = node.body
-
-        for i in range(self.function.ndim - 1, -1, -1):
-            upper = b.shape_index(i, self.function)
-            node = b.for_range_upwards(node, upper=upper)
-            self.indices.append(node.target)
-
-        return self.visit(node)
-
     def visit_ForNode(self, node):
         if node.body.may_error(self.context):
             node.body = self.astbuilder.error_handler(node.body)
         self.visitchildren(node)
         return node
 
-    def _element_location(self, node):
-        b = self.astbuilder
-        ndim = node.type.ndim
-        indices = [b.mul(index, b.stride(node, i))
-                   for i, index in enumerate(self.indices[-ndim:])]
-        pointer = b.cast(b.data_pointer(node),
-                         minitypes.c_char_t.pointer())
-        node = b.index_multiple(pointer, indices,
-                                dest_pointer_type=node.type.dtype.pointer())
-        self.visitchildren(node)
-        return node
-
     def visit_Variable(self, node):
-        if node.name in self.function.args and node.type.is_array:
-            return self._element_location(node)
-
-        return super(StridedSpecializer, self).visit_Variable(node)
+        if node.name not in self.variables:
+            self.variables[node.name] = node
+        return self.visit_Node(node)
 
     def visit_LabelNode(self, node):
         # don't copy our labels
@@ -162,6 +128,41 @@ class StridedSpecializer(Specializer):
         self.error_handlers.append(node)
         self.visitchildren(node)
         self.error_handlers.pop()
+        return node
+
+class StridedSpecializer(Specializer):
+
+    specialization_name = "strided"
+
+    def visit_NDIterate(self, node):
+        b = self.astbuilder
+
+        self.indices = []
+        node = node.body
+
+        for i in range(self.function.ndim - 1, -1, -1):
+            upper = b.shape_index(i, self.function)
+            node = b.for_range_upwards(node, upper=upper)
+            self.indices.append(node.target)
+
+        return self.visit(node)
+
+    def visit_Variable(self, node):
+        if node.name in self.function.args and node.type.is_array:
+            return self._element_location(node)
+
+        return super(StridedSpecializer, self).visit_Variable(node)
+
+    def _element_location(self, node):
+        b = self.astbuilder
+        ndim = node.type.ndim
+        indices = [b.mul(index, b.stride(node, i))
+                   for i, index in enumerate(self.indices[-ndim:])]
+        pointer = b.cast(b.data_pointer(node),
+                         minitypes.c_char_t.pointer())
+        node = b.index_multiple(pointer, indices,
+                                dest_pointer_type=node.type.dtype.pointer())
+        self.visitchildren(node)
         return node
 
 class ContigSpecializer(StridedSpecializer):
