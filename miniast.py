@@ -44,11 +44,13 @@ class Context(object):
                 name = "%s_%s" % (cls1.__name__, cls2.__name__)
                 specializer_class = type(name, (cls1, cls2), {})
 
-            specialized_ast = specializer_class(self).visit(ast)
+            specializer = specializer_class(self)
+            specialized_ast = specializer.visit(copy.deepcopy(ast))
+            # specialized_ast.print_tree(self)
             codewriter = self.codewriter_cls(self)
             visitor = self.codegen_cls(self, codewriter)
             visitor.visit(specialized_ast)
-            yield (specialized_ast, codewriter,
+            yield (specializer, specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
 
     def generate_disposal_code(self, code, node):
@@ -295,10 +297,10 @@ class ASTBuilder(object):
                             error_label=self.label('error'),
                             cleanup_label=self.label('cleanup'))
 
-    def wrap(self, opaque_node, **kwds):
-        return NodeWrapper(self.context.getpos(opaque_node),
-                           self.context.gettype(opaque_node),
-                           opaque_node, **kwds)
+    def wrap(self, opaque_node, specialize_node_callback, **kwds):
+        type = minitypes.TypeWrapper(self.context.gettype(opaque_node))
+        return NodeWrapper(self.context.getpos(opaque_node), type,
+                           opaque_node, specialize_node_callback, **kwds)
 
 class Position(object):
     def __init__(self, filename, line, col):
@@ -503,9 +505,11 @@ class NodeWrapper(ExprNode):
 
     child_attrs = []
 
-    def __init__(self, pos, type, opaque_node, **kwds):
+    def __init__(self, pos, type, opaque_node, specialize_node_callback,
+                 **kwds):
         super(NodeWrapper, self).__init__(pos, type)
         self.opaque_node = opaque_node
+        self.specialize_node_callback = specialize_node_callback
         vars(self).update(kwds)
 
     def __hash__(self):
@@ -516,6 +520,13 @@ class NodeWrapper(ExprNode):
             return self.opaque_node == other.opaque_node
 
         return NotImplemented
+
+    def __deepcopy__(self, memo):
+        kwds = dict(vars(self))
+        kwds.pop('opaque_node')
+        kwds = copy.deepcopy(kwds, memo)
+        opaque_node = self.specialize_node_callback(self, memo)
+        return type(self)(opaque_node=opaque_node, **kwds)
 
 class BinaryOperationNode(ExprNode):
     child_attrs = ['lhs', 'rhs']
@@ -578,6 +589,8 @@ class ConstantNode(ExprNode):
 
 class Variable(ExprNode):
     is_variable = True
+
+    mangled_name = None
 
     def __init__(self, pos, type, name):
         super(Variable, self).__init__(pos, type)

@@ -161,7 +161,9 @@ class CCodeGen(CodeGen):
         return node.name
 
     def visit_Variable(self, node):
-        return self.code.mangle(node.name)
+        if not node.mangled_name:
+            node.mangled_name = self.code.mangle(node.name)
+        return node.mangled_name
 
     def visit_JumpNode(self, node):
         self.code.putln("goto %s;" % self.results(node.label))

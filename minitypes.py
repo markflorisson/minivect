@@ -146,6 +146,9 @@ class TypeWrapper(Type):
     def __init__(self, opaque_type):
         self.opaque_type = opaque_type
 
+    def __deepcopy__(self, memo):
+        return self
+
 class NamedType(Type):
     def __str__(self):
         return self.name

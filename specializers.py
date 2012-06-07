@@ -34,6 +34,8 @@ class Specializer(ASTMapper):
     to copy the node and specialize the children.
     """
 
+    is_contig_specializer = False
+
     def __init__(self, context, specialization_name=None):
         super(Specializer, self).__init__(context)
         if specialization_name is not None:
@@ -52,17 +54,17 @@ class Specializer(ASTMapper):
         return result
 
     def visit_Node(self, node):
-        node = copy.copy(node)
+        # node = copy.copy(node)
         self.visitchildren(node)
         return node
 
     def visit_FunctionNode(self, node):
+        b = self.astbuilder
+
         # set this so bad people can specialize during code generation time
         node.specializer = self
         node.specialization_name = self.specialization_name
         self.function = node
-
-        b = self.astbuilder
 
         if node.body.may_error(self.context):
             node.body = b.error_handler(node.body)
@@ -82,10 +84,6 @@ class Specializer(ASTMapper):
         if node.name not in self.variables:
             self.variables[node.name] = node
         return self.visit_Node(node)
-
-    def visit_LabelNode(self, node):
-        # don't copy our labels
-        return node
 
     def visit_PositionInfoNode(self, node):
         b = self.astbuidler
@@ -168,6 +166,7 @@ class StridedSpecializer(Specializer):
 class ContigSpecializer(StridedSpecializer):
 
     specialization_name = "contig"
+    is_contig_specializer = True
 
     def visit_FunctionNode(self, node):
         b = self.astbuilder
@@ -194,4 +193,3 @@ class ContigSpecializer(StridedSpecializer):
     def _element_location(self, node):
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
-

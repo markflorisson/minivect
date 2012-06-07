@@ -3,7 +3,6 @@ Adapted from Cython/Compiler/Visitor.py, see this module for detailed
 explanations.
 """
 
-import copy
 import inspect
 
 class TreeVisitor(object):
