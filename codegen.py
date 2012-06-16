@@ -116,7 +116,7 @@ class CCodeGen(CodeGen):
 
     def visit_FuncCallNode(self, node):
         return "%s(%s)" % (self.visit(node.name_or_pointer),
-                           self.results(node.args))
+                           ", ".join(self.results(node.args)))
 
     def visit_FuncNameNode(self, node):
         return node.name
@@ -161,6 +161,9 @@ class CCodeGen(CodeGen):
         return node.name
 
     def visit_Variable(self, node):
+        if node.type.is_function:
+            return node.name
+
         if not node.mangled_name:
             node.mangled_name = self.code.mangle(node.name)
         return node.mangled_name

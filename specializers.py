@@ -143,6 +143,7 @@ class StridedSpecializer(Specializer):
             node = b.for_range_upwards(node, upper=upper)
             self.indices.append(node.target)
 
+        self.indices.reverse()
         return self.visit(node)
 
     def visit_Variable(self, node):

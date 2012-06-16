@@ -65,6 +65,7 @@ class Type(miniutils.ComparableObjectMixin):
     is_double = False
     is_c_string = True
     is_object = False
+    is_function = False
 
     subtypes = []
 
@@ -189,11 +190,19 @@ class CStringType(Type):
     def __str__(self):
         return "const char *"
 
+class VoidType(NamedType):
+    is_void = True
+    name = "void"
+
 class ObjectType(Type):
     is_object = True
 
+    def __str__(self):
+        return "PyObject *"
+
 class FunctionType(Type):
     subtypes = ['return_type', 'args']
+    is_function = True
 
 Py_ssize_t = Py_ssize_t_Type()
 c_char_t = CharType()
@@ -201,3 +210,4 @@ int_type = IntType()
 bool = BoolType()
 c_string_type = CStringType()
 object_type = ObjectType()
+void = VoidType()

@@ -116,14 +116,18 @@ class ASTBuilder(object):
         else:
             raise minierror.InferTypeError()
 
-    def function(self, name, body, arguments, shapevar, posinfo=None):
+    def function(self, name, body, arguments, shapevar=None, posinfo=None):
         """
         arguments: [FunctionArgument]
         shapevar: the shape Variable. Will be prepended as
                   an argument to `arguments`
         """
+        if shapevar is None:
+            shapevar = self.variable(minitypes.Py_ssize_t.pointer(),
+                                     '__pyx_shape')
         arguments.insert(0, self.funcarg(shapevar))
-        arguments.insert(1, posinfo)
+        if posinfo:
+            arguments.insert(1, posinfo)
         body = NDIterate(self.pos, body)
         return FunctionNode(self.pos, name, body, arguments, shapevar,
                             posinfo,
@@ -135,6 +139,12 @@ class ASTBuilder(object):
             variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))
 
+    def incref(self, var):
+        functype = minitypes.FunctionType(return_type=minitypes.void,
+                                          args=[minitypes.int_type])
+        py_incref = self.variable(functype, 'Py_INCREF')
+        return self.funccall(py_incref, [var])
+
     def array_funcarg(self, variable):
         return ArrayFunctionArgument(
                 self.pos, variable.type, name=variable.name,
@@ -145,7 +155,7 @@ class ASTBuilder(object):
 
     def funccall(self, name_or_pointer, args):
         type = name_or_pointer.type
-        if name_or_pointer.is_pointer:
+        if type.is_pointer:
             type = name_or_pointer.type.base_type
         return FuncCallNode(self.pos, type=type,
                             name_or_pointer=name_or_pointer, args=args)
