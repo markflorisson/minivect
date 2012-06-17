@@ -4,6 +4,7 @@ def any(it):
     for obj in it:
         if obj:
             return True
+    return False
 
 def all(it):
     for obj in it:
