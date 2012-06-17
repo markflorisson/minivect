@@ -139,11 +139,16 @@ class ASTBuilder(object):
             variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))
 
-    def incref(self, var):
+    def incref(self, var, funcname='Py_INCREF'):
+        temp = self.coerce_to_temp(var)
         functype = minitypes.FunctionType(return_type=minitypes.void,
-                                          args=[minitypes.int_type])
+                                          args=[minitypes.object_type])
         py_incref = self.variable(functype, 'Py_INCREF')
-        return self.funccall(py_incref, [var])
+        incref_call = self.expr_stat(self.funccall(py_incref, [temp]))
+        return self.expr(stats=[incref_call], expr=temp)
+
+    def decref(self, var):
+        return self.incref(var, funcname='Py_DECREF')
 
     def array_funcarg(self, variable):
         return ArrayFunctionArgument(
@@ -193,7 +198,13 @@ class ASTBuilder(object):
         return StatListNode(self.pos, stats)
 
     def expr_stat(self, expr):
+        "Turn an expression into a statement"
         return ExprStatNode(expr.pos, expr=expr)
+
+    def expr(self, stats=(), expr=None):
+        "Evaluate a bunch of statements before evaluating an expression."
+        return ExprNodeWithStatement(self.pos, type=expr.type,
+                                     stat=self.stats(*stats), expr=expr)
 
     def if_(self, cond, body):
         return IfNode(self.pos, cond=cond, body=body)
@@ -248,6 +259,13 @@ class ASTBuilder(object):
 
     def unop(self, op, operand):
         return UnopNode(self.pos, op, operand)
+
+    def coerce_to_temp(self, expr):
+        type = expr.type
+        if type.is_array:
+            type = type.dtype
+        temp = self.temp(type)
+        return self.expr(stats=[self.assign(temp, expr)], expr=temp)
 
     def temp(self, type):
         self.tempcounter += 1
@@ -503,6 +521,9 @@ class StatListNode(Node):
 
 class ExprStatNode(Node):
     child_attrs = ['expr']
+
+class ExprNodeWithStatement(Node):
+    child_attrs = ['stat', 'expr']
 
 class NodeWrapper(ExprNode):
     """

@@ -90,6 +90,10 @@ class CCodeGen(CodeGen):
     def visit_ExprStatNode(self, node):
         self.code.putln(self.visit(node.expr) + ';')
 
+    def visit_ExprNodeWithStatement(self, node):
+        self.visit(node.stat)
+        return self.visit(node.expr)
+
     def visit_ForNode(self, node):
         code = self.code
 
