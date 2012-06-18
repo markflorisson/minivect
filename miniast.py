@@ -23,6 +23,8 @@ class Context(object):
     is one that has a interface compatible with ours.
     """
 
+    debug = False
+
     codegen_cls = codegen.CodeGen
     cleanup_codegen_cls = codegen.CodeGenCleanup
     codewriter_cls = minicode.CodeWriter
@@ -139,6 +141,14 @@ class ASTBuilder(object):
             variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))
 
+    def array_funcarg(self, variable):
+        return ArrayFunctionArgument(
+                self.pos, variable.type, name=variable.name,
+                variable=variable,
+                data_pointer=self.data_pointer(variable),
+                #shape_pointer=self.shapevar(variable),
+                strides_pointer=self.stridesvar(variable))
+
     def incref(self, var, funcname='Py_INCREF'):
         temp = self.coerce_to_temp(var)
         functype = minitypes.FunctionType(return_type=minitypes.void,
@@ -150,13 +160,9 @@ class ASTBuilder(object):
     def decref(self, var):
         return self.incref(var, funcname='Py_DECREF')
 
-    def array_funcarg(self, variable):
-        return ArrayFunctionArgument(
-                self.pos, variable.type, name=variable.name,
-                variable=variable,
-                data_pointer=self.data_pointer(variable),
-                #shape_pointer=self.shapevar(variable),
-                strides_pointer=self.stridesvar(variable))
+    def print_(self, *args):
+        "Print out all arguments to stdout"
+        return PrintNode(self.pos, args=list(args))
 
     def funccall(self, name_or_pointer, args):
         type = name_or_pointer.type
@@ -483,6 +489,9 @@ class FunctionArgument(ExprNode):
 class ArrayFunctionArgument(ExprNode):
     child_attrs = ['data_pointer', 'strides_pointer']
     is_array_funcarg = True
+
+class PrintNode(Node):
+    child_attrs = ['args']
 
 class NDIterate(Node):
 

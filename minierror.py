@@ -9,3 +9,6 @@ class UnmappableTypeError(Error):
 
 class UnpromotableTypeError(Error):
     "Raised when the compiler does not know how to promote two types."
+
+class UnmappableFormatSpecifierError(Error):
+    "Raised when a type cannot be mapped to a (printf) format specifier"

@@ -58,6 +58,27 @@ class Specializer(ASTMapper):
         self.visitchildren(node)
         return node
 
+    def _index_list(self, pointer, ndim):
+        return [self.astbuilder.index(pointer, self.astbuilder.constant(i))
+                    for i in range(ndim)]
+
+    def _debug_function_call(self, b, node):
+        stats = [
+            b.print_(b.constant("Calling function %s (%s specializer)" % (
+                                       node.name, self.specialization_name))),
+            b.print_(b.constant("shape:"), *self._index_list(node.shape,
+                                                             node.ndim)),
+        ]
+
+        if not self.is_contig_specializer:
+            for idx, arg in enumerate(node.arguments):
+                if arg.is_array_funcarg:
+                    stats.append(b.print_(b.constant("strides operand%d:" % idx),
+                                          *self._index_list(arg.strides_pointer,
+                                                            arg.type.ndim)))
+
+        node.body = b.stats(b.stats(*stats), node.body)
+
     def visit_FunctionNode(self, node):
         b = self.astbuilder
 
@@ -65,6 +86,9 @@ class Specializer(ASTMapper):
         node.specializer = self
         node.specialization_name = self.specialization_name
         self.function = node
+
+        if self.context.debug:
+            self._debug_function_call(b, node)
 
         if node.body.may_error(self.context):
             node.body = b.error_handler(node.body)
@@ -175,15 +199,15 @@ class ContigSpecializer(StridedSpecializer):
         # compute the product of the shape and insert it into the function body
         extents = [b.index(node.shape, b.constant(i))
                        for i in range(node.ndim)]
-        node.shape = b.temp(node.shape.type.base_type)
-        init_shape = b.assign(node.shape, reduce(b.mul, extents))
+        node.total_shape = b.temp(node.shape.type.base_type)
+        init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
         node.body = b.stats(init_shape, node.body)
 
         return super(ContigSpecializer, self).visit_FunctionNode(node)
 
     def visit_NDIterate(self, node):
         node = self.astbuilder.for_range_upwards(
-                        node.body, upper=self.function.shape)
+                        node.body, upper=self.function.total_shape)
         self.target = node.target
         self.visitchildren(node)
         return node

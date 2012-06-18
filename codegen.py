@@ -3,6 +3,8 @@ Code generator module. Subclass CodeGen to implement a code generator
 as a visitor.
 """
 
+import minierror
+import minitypes
 import minivisitor
 
 class CodeGen(minivisitor.TreeVisitor):
@@ -41,6 +43,33 @@ class CodeGenCleanup(CodeGen):
     def visit_ErrorHandler(self, node):
         # stop recursion here
         pass
+
+def format_specifier(node, astbuilder):
+    "Return a printf() format specifier for the given type"
+    type = node.type
+
+    format = None
+    dst_type = None
+
+    if type.is_pointer:
+        format = "%p"
+    elif type.is_numeric:
+        if type.is_int_like:
+            format = "%i"
+            dst_type = minitypes.int_type
+        elif type.is_float:
+            format = "%f"
+        elif type.is_double:
+            format = "%lf"
+    elif type.is_c_string:
+        format = "%s"
+
+    if format is not None:
+        if dst_type:
+            node = astbuilder.cast(node, dst_type)
+        return format, node
+    else:
+        raise minierror.UnmappableFormatSpecifierError(type)
 
 class CCodeGen(CodeGen):
 
@@ -93,6 +122,16 @@ class CCodeGen(CodeGen):
     def visit_ExprNodeWithStatement(self, node):
         self.visit(node.stat)
         return self.visit(node.expr)
+
+    def visit_PrintNode(self, node):
+        output = ['printf("']
+        for i, arg in enumerate(node.args):
+            specifier, arg = format_specifier(arg, self.specializer.astbuilder)
+            node.args[i] = arg
+            output.append(specifier + " ")
+
+        self.code.putln('%s\\n", %s);' % ("".join(output).rstrip(),
+                                          ", ".join(self.results(*node.args))))
 
     def visit_ForNode(self, node):
         code = self.code
@@ -186,6 +225,8 @@ class CCodeGen(CodeGen):
         return node.mangled_name
 
     def visit_ConstantNode(self, node):
+        if node.type.is_c_string:
+            return '"%s"' % node.value.encode('string-escape')
         return str(node.value)
 
     def visit_ErrorHandler(self, node):

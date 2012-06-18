@@ -63,9 +63,10 @@ class Type(miniutils.ComparableObjectMixin):
     is_int = False
     is_float = False
     is_double = False
-    is_c_string = True
+    is_c_string = False
     is_object = False
     is_function = False
+    is_int_like = False
 
     subtypes = []
 
@@ -164,7 +165,10 @@ class BoolType(NamedType):
 class NumericType(NamedType):
     is_numeric = True
 
-class IntType(NumericType):
+class IntLike(NumericType):
+    is_int_like = True
+
+class IntType(IntLike):
     is_int = True
     name = "int"
 
@@ -176,11 +180,11 @@ class DoubleType(NumericType):
     is_double = True
     name = "double"
 
-class Py_ssize_t_Type(NumericType):
+class Py_ssize_t_Type(IntLike):
     is_py_ssize_t = True
     name = "Py_ssize_t"
 
-class CharType(NumericType):
+class CharType(IntLike):
     is_char = True
     name = "char"
 
