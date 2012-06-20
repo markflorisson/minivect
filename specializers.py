@@ -156,18 +156,31 @@ class StridedSpecializer(Specializer):
 
     specialization_name = "strided"
 
+    order = "C"
+
     def visit_NDIterate(self, node):
         b = self.astbuilder
 
         self.indices = []
         node = node.body
 
-        for i in range(self.function.ndim - 1, -1, -1):
+        if self.order == "C":
+            start = self.function.ndim - 1
+            stop = -1
+            step = -1
+        else:
+            start = 0
+            stop = self.function.ndim
+            step = 1
+
+        for i in range(start, stop, step):
             upper = b.shape_index(i, self.function)
             node = b.for_range_upwards(node, upper=upper)
             self.indices.append(node.target)
 
-        self.indices.reverse()
+        if self.order == "C":
+            self.indices.reverse()
+
         return self.visit(node)
 
     def visit_Variable(self, node):
@@ -187,6 +200,10 @@ class StridedSpecializer(Specializer):
                                 dest_pointer_type=node.type.dtype.pointer())
         self.visitchildren(node)
         return node
+
+class StridedFortranSpecializer(StridedSpecializer):
+    specialization_name = "strided_fortran"
+    order = "F"
 
 class ContigSpecializer(StridedSpecializer):
 
