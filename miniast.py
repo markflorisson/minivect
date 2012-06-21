@@ -40,6 +40,7 @@ class Context(object):
         return self.run(astmapper.visit(opaque_ast), specializers)
 
     def run(self, ast, specializer_classes):
+        self.astbuilder.tempcounter = 0
         for specializer_class in specializer_classes:
             if self.specializer_mixin_cls:
                 cls1, cls2 = specializer_class, self.specializer_mixin_cls
