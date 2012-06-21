@@ -188,7 +188,14 @@ class CCodeGen(CodeGen):
         return name
 
     def visit_AssignmentExpr(self, node):
-        return "%s = %s" % self.results(node.lhs, node.rhs)
+        if (node.rhs.is_binop and node.rhs.operator == '+' and
+                node.rhs.rhs.is_constant and node.rhs.rhs.value == 1):
+            return "%s++" % self.visit(node.rhs.lhs)
+
+        return "(%s = %s)" % self.results(node.lhs, node.rhs)
+
+    def visit_IfElseExprNode(self, node):
+        return "(%s ? %s : %s)" % (self.results(node.cond, node.lhs, node.rhs))
 
     def visit_CastNode(self, node):
         return "((%s) %s)" % (self.context.declare_type(node.type),

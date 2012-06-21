@@ -180,14 +180,16 @@ class ASTBuilder(object):
     def for_(self, body, init, condition, step, is_tiled=False):
         return ForNode(self.pos, init, condition, step, body, is_tiled)
 
-    def for_range_upwards(self, body, upper, lower=None):
+    def for_range_upwards(self, body, upper, lower=None, step=None):
         if lower is None:
             lower = self.constant(0)
+        if step is None:
+            step = self.constant(1)
 
         temp = self.temp(minitypes.Py_ssize_t)
         init = self.assign_expr(temp, lower)
         condition = self.binop(minitypes.bool, '<', temp, upper)
-        step = self.assign_expr(temp, self.add(temp, self.constant(1)))
+        step = self.assign_expr(temp, self.add(temp, step))
 
         result = self.for_(body, init, condition, step)
         result.target = temp
@@ -215,6 +217,10 @@ class ASTBuilder(object):
     def if_(self, cond, body):
         return IfNode(self.pos, cond=cond, body=body)
 
+    def if_else_expr(self, cond, lhs, rhs):
+        type = self.context.promote_types(lhs.type, rhs.type)
+        return IfElseExprNode(self.pos, type=type, cond=cond, lhs=lhs, rhs=rhs)
+
     def binop(self, type, op, lhs, rhs):
         return BinopNode(self.pos, type, op, lhs, rhs)
 
@@ -235,6 +241,11 @@ class ASTBuilder(object):
 
         type = self.context.promote_types(lhs.type, rhs.type)
         return self.binop(type, '*', lhs, rhs)
+
+    def min(self, lhs, rhs):
+        type = self.context.promote_types(lhs.type, rhs.type)
+        cmp_node = self.binop(type, '<', lhs, rhs)
+        return self.if_else_expr(cmp_node, lhs, rhs)
 
     def index(self, pointer, index, dest_pointer_type=None):
         if dest_pointer_type:
@@ -599,6 +610,9 @@ class SingleOperandNode(ExprNode):
 
 class AssignmentExpr(BinaryOperationNode):
     is_assignment = True
+
+class IfElseExprNode(ExprNode):
+    child_attrs = ['cond', 'lhs', 'rhs']
 
 class UnopNode(SingleOperandNode):
 

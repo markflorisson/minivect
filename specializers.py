@@ -35,6 +35,7 @@ class Specializer(ASTMapper):
     """
 
     is_contig_specializer = False
+    is_tiled_specializer = False
 
     def __init__(self, context, specialization_name=None):
         super(Specializer, self).__init__(context)
@@ -152,7 +153,42 @@ class Specializer(ASTMapper):
         self.error_handlers.pop()
         return node
 
-class StridedSpecializer(Specializer):
+class OrderedSpecializer(Specializer):
+    def loop_order(self, order):
+        if order == "C":
+            return self.c_loop_order()
+        else:
+            return self.f_loop_order()
+
+    def c_loop_order(self):
+        return self.function.ndim - 1, -1, -1
+
+    def f_loop_order(self):
+        return 0, self.function.ndim, 1
+
+    def ordered_loop(self, node, result_indices, lower=None, upper=None,
+                     step=None):
+        b = self.astbuilder
+
+        if lower is None:
+            lower = lambda i: None
+        if upper is None:
+            upper = lambda i: b.shape_index(i, self.function)
+
+        indices = []
+        # print range(*self.loop_order(self.order))
+        for i in range(*self.loop_order(self.order)):
+            node = b.for_range_upwards(node, lower=lower(i), upper=upper(i),
+                                       step=step)
+            indices.append(node.target)
+
+        if self.order == "C":
+            indices.reverse()
+
+        result_indices.extend(indices)
+        return node
+
+class StridedSpecializer(OrderedSpecializer):
 
     specialization_name = "strided"
 
@@ -160,28 +196,8 @@ class StridedSpecializer(Specializer):
 
     def visit_NDIterate(self, node):
         b = self.astbuilder
-
         self.indices = []
-        node = node.body
-
-        if self.order == "C":
-            start = self.function.ndim - 1
-            stop = -1
-            step = -1
-        else:
-            start = 0
-            stop = self.function.ndim
-            step = 1
-
-        for i in range(start, stop, step):
-            upper = b.shape_index(i, self.function)
-            node = b.for_range_upwards(node, upper=upper)
-            self.indices.append(node.target)
-
-        if self.order == "C":
-            self.indices.reverse()
-
-        return self.visit(node)
+        return self.visit(self.ordered_loop(node.body, self.indices))
 
     def visit_Variable(self, node):
         if node.name in self.function.args and node.type.is_array:
@@ -235,3 +251,44 @@ class ContigSpecializer(StridedSpecializer):
     def _element_location(self, node):
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
+
+class CTiledStridedSpecializer(StridedSpecializer):
+
+    specialization_name = "tiled_c"
+    order = "C"
+    is_tiled_specializer = True
+
+    def get_blocksize(self):
+        return self.astbuilder.constant(128)
+
+    def visit_NDIterate(self, node):
+        b = self.astbuilder
+
+        self.tiled_indices = []
+        self.indices = []
+        self.blocksize = self.get_blocksize()
+
+        tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
+        body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
+                                 step=self.blocksize)
+        del tiled_loop_body.stats[:]
+
+        upper_limits = []
+        stats = []
+        for i, index in enumerate(self.tiled_indices):
+            upper_limit = b.temp(index.type)
+            tiled_loop_body.stats.append(
+                b.assign(upper_limit, b.min(b.add(index, self.blocksize),
+                                            b.shape_index(i, self.function))))
+            upper_limits.append(upper_limit)
+
+        tiled_loop_body.stats.append(self.ordered_loop(
+                node.body, self.indices,
+                lower=lambda i: self.tiled_indices[i],
+                upper=lambda i: upper_limits[i]))
+        return self.visit(body)
+
+class FTiledStridedSpecializer(CTiledStridedSpecializer):
+
+    specialization_name = "tiled_fortran"
+    order = "F"
