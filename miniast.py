@@ -119,7 +119,7 @@ class ASTBuilder(object):
         else:
             raise minierror.InferTypeError()
 
-    def function(self, name, body, arguments, shapevar=None, posinfo=None):
+    def function(self, name, body, args, shapevar=None, posinfo=None):
         """
         arguments: [FunctionArgument]
         shapevar: the shape Variable. Will be prepended as
@@ -128,12 +128,20 @@ class ASTBuilder(object):
         if shapevar is None:
             shapevar = self.variable(minitypes.Py_ssize_t.pointer(),
                                      '__pyx_shape')
+
+        arguments, scalar_arguments = [], []
+        for arg in args:
+            if arg.type.is_array:
+                arguments.append(arg)
+            else:
+                scalar_arguments.append(arg)
+
         arguments.insert(0, self.funcarg(shapevar))
         if posinfo:
             arguments.insert(1, posinfo)
         body = NDIterate(self.pos, body)
-        return FunctionNode(self.pos, name, body, arguments, shapevar,
-                            posinfo,
+        return FunctionNode(self.pos, name, body, arguments, scalar_arguments,
+                            shapevar, posinfo,
                             error_value=self.constant(-1),
                             success_value=self.constant(0))
 
@@ -151,12 +159,10 @@ class ASTBuilder(object):
                 strides_pointer=self.stridesvar(variable))
 
     def incref(self, var, funcname='Py_INCREF'):
-        temp = self.coerce_to_temp(var)
         functype = minitypes.FunctionType(return_type=minitypes.void,
                                           args=[minitypes.object_type])
-        py_incref = self.variable(functype, 'Py_INCREF')
-        incref_call = self.expr_stat(self.funccall(py_incref, [temp]))
-        return self.expr(stats=[incref_call], expr=temp)
+        py_incref = self.variable(functype, funcname)
+        return self.expr_stat(self.funccall(py_incref, [var]))
 
     def decref(self, var):
         return self.incref(var, funcname='Py_DECREF')
@@ -208,7 +214,7 @@ class ASTBuilder(object):
 
     def expr_stat(self, expr):
         "Turn an expression into a statement"
-        return ExprStatNode(expr.pos, expr=expr)
+        return ExprStatNode(expr.pos, type=expr.type, expr=expr)
 
     def expr(self, stats=(), expr=None):
         "Evaluate a bunch of statements before evaluating an expression."
@@ -285,9 +291,8 @@ class ASTBuilder(object):
         temp = self.temp(type)
         return self.expr(stats=[self.assign(temp, expr)], expr=temp)
 
-    def temp(self, type):
-        self.tempcounter += 1
-        return TempNode(self.pos, type, 'temp%d' % self.tempcounter)
+    def temp(self, type, name=None):
+        return TempNode(self.pos, type, name=name or 'temp')
 
     def constant(self, value, type=None):
         if type is None:
@@ -412,7 +417,7 @@ class Node(miniutils.ComparableObjectMixin):
 
     def __hash__(self):
         h = hash(type(self))
-        for subtype in self.comparison_type_list:
+        for obj in self.comparison_objects:
             h = h ^ hash(subtype)
 
         return h
@@ -425,13 +430,14 @@ class ExprNode(Node):
         self.type = type
 
 class FunctionNode(Node):
-    child_attrs = ['body', 'arguments']
-    def __init__(self, pos, name, body, arguments, shape, posinfo,
-                 error_value, success_value):
+    child_attrs = ['body', 'arguments', 'scalar_arguments']
+    def __init__(self, pos, name, body, arguments, scalar_arguments,
+                 shape, posinfo, error_value, success_value):
         super(FunctionNode, self).__init__(pos)
         self.name = name
         self.body = body
         self.arguments = arguments
+        self.scalar_arguments = scalar_arguments
         self.shape = shape
         self.posinfo = posinfo
         self.error_value = error_value
@@ -671,6 +677,12 @@ class ShapePointer(ArrayAttribute):
 
 class TempNode(Variable):
     is_temp = True
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return hash(id(self))
 
 class ErrorHandler(Node):
     """

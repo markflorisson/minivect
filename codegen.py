@@ -80,6 +80,11 @@ class CCodeGen(CodeGen):
         super(CCodeGen, self).__init__(context, codewriter)
         self.declared_temps = set()
 
+    def strip(self, expr_string):
+        if expr_string[0] == '(' and expr_string[-1] == ')':
+            return expr_string[1:-1]
+        return expr_string
+
     def visit_FunctionNode(self, node):
         code = self.code
 
@@ -89,7 +94,7 @@ class CCodeGen(CodeGen):
         name = code.mangle(node.name + node.specialization_name)
         node.mangled_name = name
 
-        args = self.results(node.arguments)
+        args = self.results(node.arguments + node.scalar_arguments)
         proto = "static int %s(%s)" % (name, ", ".join(args))
         code.proto_code.putln(proto + ';')
         code.putln("%s {" % proto)
@@ -117,7 +122,7 @@ class CCodeGen(CodeGen):
         return node
 
     def visit_ExprStatNode(self, node):
-        self.code.putln(self.visit(node.expr) + ';')
+        self.code.putln(self.strip(self.visit(node.expr)) + ';')
 
     def visit_ExprNodeWithStatement(self, node):
         self.visit(node.stat)
@@ -179,13 +184,15 @@ class CCodeGen(CodeGen):
         return "(%s%s)" % (node.operator, self.visit(node.operand))
 
     def visit_TempNode(self, node):
-        name = self.code.mangle(node.name)
-        if name not in self.declared_temps:
-            self.declared_temps.add(name)
+        if node not in self.declared_temps:
+            node.name = "%s%d" % (self.code.mangle(node.name),
+                                  len(self.declared_temps))
+            self.declared_temps.add(node)
             code = self.code.declaration_levels[0]
-            code.putln("%s %s;" % (self.context.declare_type(node.type), name))
+            code.putln("%s %s;" % (self.context.declare_type(node.type),
+                                   node.name))
 
-        return name
+        return node.name
 
     def visit_AssignmentExpr(self, node):
         if (node.rhs.is_binop and node.rhs.operator == '+' and

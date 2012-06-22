@@ -4,6 +4,7 @@ explanations.
 """
 
 import inspect
+import miniast
 
 class TreeVisitor(object):
     """
@@ -119,13 +120,19 @@ class PrintTree(TreeVisitor):
     indent = 0
     want_access_path = True
 
+    def format_node(self, node):
+        result = type(node).__name__
+        if isinstance(node, miniast.Variable):
+            result = "%s (name=%s)" % (result, node.name)
+        return result
+
     def visit_Node(self, node):
         if self.access_path:
             parent, attr, idx = self.access_path[-1]
         else:
             attr = "(root)"
 
-        print "%s%s: %s" % (self.indent * "  ", attr, type(node).__name__)
+        print "%s%s: %s" % (self.indent * "  ", attr, self.format_node(node))
         self.indent += 1
         self.visitchildren(node)
         self.indent -= 1
