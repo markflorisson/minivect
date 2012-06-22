@@ -281,8 +281,8 @@ class ASTBuilder(object):
     def dereference(self, pointer):
         return DereferenceNode(self.pos, pointer.type.base_type, pointer)
 
-    def unop(self, op, operand):
-        return UnopNode(self.pos, op, operand)
+    def unop(self, type, operator, operand):
+        return UnopNode(self.pos, type, operator, operand)
 
     def coerce_to_temp(self, expr):
         type = expr.type
