@@ -133,7 +133,7 @@ class CCodeGen(CodeGen):
         for i, arg in enumerate(node.args):
             specifier, arg = format_specifier(arg, self.specializer.astbuilder)
             node.args[i] = arg
-            output.append(specifier + " ")
+            output.append("%%%s " % specifier)
 
         self.code.putln('%s\\n", %s);' % ("".join(output).rstrip(),
                                           ", ".join(self.results(*node.args))))
