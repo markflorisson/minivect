@@ -72,6 +72,7 @@ class Type(miniutils.ComparableObjectMixin):
 
     def __init__(self, **kwds):
         vars(self).update(kwds)
+        self.qualifiers = set()
 
     def pointer(self):
         return PointerType(self)
@@ -107,6 +108,7 @@ class ArrayType(Type):
 
     def __init__(self, dtype, ndim, is_c_contig=False, is_f_contig=False,
                  inner_contig=False):
+        super(ArrayType, self).__init__()
         self.dtype = dtype
         self.ndim = ndim
         self.is_c_contig = is_c_contig
@@ -125,16 +127,19 @@ class PointerType(Type):
     subtypes = ['base_type']
 
     def __init__(self, base_type):
+        super(PointerType, self).__init__()
         self.base_type = base_type
 
     def tostring(self, context):
-        return "%s *" % context.declare_type(self.base_type)
+        return "%s *%s" % (context.declare_type(self.base_type),
+                           " ".join(self.qualifiers))
 
 class CArrayType(Type):
     is_carray = True
     subtypes = ['base_type']
 
     def __init__(self, base_type, size):
+        super(CArrayType, self).__init__()
         self.base_type = base_type
         self.size = size
 
@@ -146,6 +151,7 @@ class TypeWrapper(Type):
     subtypes = ['opaque_type']
 
     def __init__(self, opaque_type):
+        super(TypeWrapper, self).__init__()
         self.opaque_type = opaque_type
 
     def __deepcopy__(self, memo):
@@ -153,14 +159,14 @@ class TypeWrapper(Type):
 
 class NamedType(Type):
     def __str__(self):
-        return self.name
+        return "%s %s" % (self.name, " ".join(self.qualifiers))
 
 class BoolType(NamedType):
     is_bool = True
     name = "bool"
 
     def tostring(self, context):
-        return "int"
+        return "int %s" % " ".join(self.qualifiers)
 
 class NumericType(NamedType):
     is_numeric = True

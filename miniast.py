@@ -43,7 +43,7 @@ class Context(object):
         self.astbuilder.tempcounter = 0
         for specializer_class in specializer_classes:
             if self.specializer_mixin_cls:
-                cls1, cls2 = specializer_class, self.specializer_mixin_cls
+                cls1, cls2 = self.specializer_mixin_cls, specializer_class
                 name = "%s_%s" % (cls1.__name__, cls2.__name__)
                 specializer_class = type(name, (cls1, cls2), {})
 
