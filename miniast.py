@@ -231,14 +231,15 @@ class ASTBuilder(object):
     def binop(self, type, op, lhs, rhs):
         return BinopNode(self.pos, type, op, lhs, rhs)
 
-    def add(self, lhs, rhs):
+    def add(self, lhs, rhs, result_type=None):
         if lhs.is_constant and lhs.value == 0:
             return rhs
         elif rhs.is_constant and rhs.value == 0:
             return lhs
 
-        type = self.context.promote_types(lhs.type, rhs.type)
-        return self.binop(type, '+', lhs, rhs)
+        if result_type is None:
+            result_type = self.context.promote_types(lhs.type, rhs.type)
+        return self.binop(result_type, '+', lhs, rhs)
 
     def mul(self, lhs, rhs):
         if lhs.is_constant and lhs.value == 1:
@@ -656,6 +657,12 @@ class Variable(ExprNode):
     def __init__(self, pos, type, name):
         super(Variable, self).__init__(pos, type)
         self.name = name
+
+    def __eq__(self, other):
+        return self.name == other.name
+
+    def __hash__(self):
+        return hash(self.name)
 
 class ArrayAttribute(Variable):
     def __init__(self, pos, type, arrayvar):

@@ -130,9 +130,25 @@ class PointerType(Type):
         super(PointerType, self).__init__()
         self.base_type = base_type
 
-    def tostring(self, context):
+    def tostring(self, context, qualifiers=None):
+        if qualifiers is None:
+            qualifiers = self.qualifiers
         return "%s *%s" % (context.declare_type(self.base_type),
-                           " ".join(self.qualifiers))
+                           " ".join(qualifiers))
+
+class MutablePointerType(Type):
+    subtypes = ['pointer_type']
+
+    def __init__(self, pointer_type):
+        super(MutablePointerType, self).__init__()
+        self.pointer_type = pointer_type
+
+    def tostring(self, context):
+        qualifiers = self.pointer_type.qualifiers - set(['const'])
+        return self.pointer_type.tostring(context, qualifiers=qualifiers)
+
+    def __getattr__(self, attr):
+        return getattr(self.pointer_type, attr)
 
 class CArrayType(Type):
     is_carray = True
