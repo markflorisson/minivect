@@ -122,11 +122,11 @@ class Specializer(ASTMapper):
                 b.assign(b.deref(posinfo.column), b.constant(pos.column)))
 
     def visit_RaiseNode(self, node):
-        from minitypes import FunctionType, object_type
+        from minitypes import FunctionType, object_
         b = self.astbuilder
 
-        functype = FunctionType(return_type=object_type,
-                                args=[object_type] * (2 + len(node.fmt_args)))
+        args = [object_] * (2 + len(node.fmt_args))
+        functype = FunctionType(return_type=object_, args=args)
         return b.expr_stat(
             b.funccall(b.funcname(functype, "PyErr_Format"),
                        [node.exc_var, node.msg_val] + node.fmt_args))
@@ -134,7 +134,7 @@ class Specializer(ASTMapper):
     def visit_ErrorHandler(self, node):
         b = self.astbuilder
 
-        node.error_variable = b.temp(minitypes.bool)
+        node.error_variable = b.temp(minitypes.bool_)
         node.error_var_init = b.assign(node.error_variable, 0)
         node.cleanup_jump = b.jump(node.cleanup_label)
         node.error_target_label = b.jump_target(node.error_label)
@@ -212,7 +212,7 @@ class StridedSpecializer(OrderedSpecializer):
         indices = [b.mul(index, b.stride(node, i))
                    for i, index in enumerate(indices[-ndim:])]
         pointer = b.cast(b.data_pointer(node),
-                         minitypes.c_char_t.pointer())
+                         minitypes.char.pointer())
         node = b.index_multiple(pointer, indices,
                                 dest_pointer_type=node.type.dtype.pointer())
         self.visitchildren(node)

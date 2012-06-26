@@ -56,7 +56,7 @@ def format_specifier(node, astbuilder):
     elif type.is_numeric:
         if type.is_int_like:
             format = "%i"
-            dst_type = minitypes.int_type
+            dst_type = minitypes.int_
         elif type.is_float:
             format = "%f"
         elif type.is_double:
@@ -106,8 +106,7 @@ class CCodeGen(CodeGen):
         code.putln("}")
 
     def _argument_variables(self, variables):
-        typename = self.context.declare_type
-        return ", ".join("%s %s" % (typename(v.type), self.visit(v))
+        return ", ".join("%s %s" % (v.type, self.visit(v))
                              for v in variables if v is not None)
 
     def visit_FunctionArgument(self, node):
@@ -189,8 +188,7 @@ class CCodeGen(CodeGen):
                                   len(self.declared_temps))
             self.declared_temps.add(node)
             code = self.code.declaration_levels[0]
-            code.putln("%s %s;" % (self.context.declare_type(node.type),
-                                   node.name))
+            code.putln("%s %s;" % (node.type, node.name))
 
         return node.name
 
@@ -205,8 +203,7 @@ class CCodeGen(CodeGen):
         return "(%s ? %s : %s)" % (self.results(node.cond, node.lhs, node.rhs))
 
     def visit_CastNode(self, node):
-        return "((%s) %s)" % (self.context.declare_type(node.type),
-                              self.visit(node.operand))
+        return "((%s) %s)" % (node.type, self.visit(node.operand))
 
     def visit_DereferenceNode(self, node):
         return "(*%s)" % self.visit(node.operand)

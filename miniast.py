@@ -34,7 +34,7 @@ class Context(object):
 
     def __init__(self, astbuilder=None, typemapper=None):
         self.astbuilder = astbuilder or ASTBuilder(self)
-        self.typemapper = typemapper or minitypes.TypeMapper()
+        self.typemapper = typemapper or minitypes.TypeMapper(self)
 
     def run_opaque(self, astmapper, opaque_ast, specializers):
         return self.run(astmapper.visit(opaque_ast), specializers)
@@ -86,7 +86,11 @@ class Context(object):
 
     def declare_type(self, type):
         "Return a declaration for a type"
-        return type.tostring(self)
+        raise NotImplementedError
+
+    def to_llvm(self, type):
+        self.typemapper.to_llvm(type)
+
 
 class CContext(Context):
 
@@ -160,7 +164,7 @@ class ASTBuilder(object):
 
     def incref(self, var, funcname='Py_INCREF'):
         functype = minitypes.FunctionType(return_type=minitypes.void,
-                                          args=[minitypes.object_type])
+                                          args=[minitypes.object_])
         py_incref = self.variable(functype, funcname)
         return self.expr_stat(self.funccall(py_incref, [var]))
 
@@ -195,7 +199,7 @@ class ASTBuilder(object):
 
         temp = self.temp(minitypes.Py_ssize_t)
         init = self.assign_expr(temp, lower)
-        condition = self.binop(minitypes.bool, '<', temp, upper)
+        condition = self.binop(minitypes.bool_, '<', temp, upper)
         step = self.assign_expr(temp, self.add(temp, step))
 
         result = self.for_(body, init, condition, step)
@@ -350,7 +354,8 @@ class ASTBuilder(object):
                             cleanup_label=self.label('cleanup'))
 
     def wrap(self, opaque_node, specialize_node_callback, **kwds):
-        type = minitypes.TypeWrapper(self.context.gettype(opaque_node))
+        type = minitypes.TypeWrapper(self.context.gettype(opaque_node),
+                                     self.context)
         return NodeWrapper(self.context.getpos(opaque_node), type,
                            opaque_node, specialize_node_callback, **kwds)
 

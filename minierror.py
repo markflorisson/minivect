@@ -12,3 +12,6 @@ class UnpromotableTypeError(Error):
 
 class UnmappableFormatSpecifierError(Error):
     "Raised when a type cannot be mapped to a (printf) format specifier"
+
+class InvalidTypeSpecification(Error):
+    "Raised when a type is sliced incorrectly."
