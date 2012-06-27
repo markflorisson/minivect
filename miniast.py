@@ -65,7 +65,7 @@ class Context(object):
     #
 
     def promote_types(self, type1, type2):
-        return minitypes.promote(type1, type2)
+        return self.typemapper.promote_types(type1, type2)
 
     def getchildren(self, node):
         "Implement to allow a minivisitor.Visitor over a foreign AST."

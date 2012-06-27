@@ -39,30 +39,6 @@ except ImportError:
 import miniutils
 import minierror
 
-#rank_to_type_name = (
-#    "char",
-#    "short",
-#    "int",
-#    "long",
-#    "Py_ssize_t",
-#    "PY_LONG_LONG",
-#    "float",
-#    "double",
-#    "long double",
-#)
-#typename_to_rank = dict(
-#    (name, idx) for idx, name in enumerate(rank_to_type_name))
-
-def promote(type1, type2):
-    if type1.is_pointer:
-        return type1
-    elif type2.is_pointer:
-        return type2
-    elif type1.is_numeric and type2.is_numeric:
-        return max([type1, type2], key=lambda type: type.rank)
-    else:
-        raise minierror.UnpromotableTypeError((type1, type2))
-
 class TypeMapper(object):
     def __init__(self, context):
         self.context = context
@@ -98,6 +74,33 @@ class TypeMapper(object):
             return object_
             # raise minierror.UnmappableTypeError(type(value))
 
+    def promote_numeric(self, type1, type2):
+        return max([type1, type2], key=lambda type: type.rank)
+
+    def promote_arrays(self, type1, type2):
+        equal_ndim = type1.ndim == type2.ndim
+        return ArrayType(self.promote_types(type1.dtype, type2.dtype),
+                         ndim=max(type1.ndim, type2.ndim),
+                         is_c_contig=(equal_ndim and type1.is_c_contig and
+                                      type2.is_c_contig),
+                         is_f_contig=(equal_ndim and type1.is_f_contig and
+                                      type2.is_f_contig))
+
+    def promote_types(self, type1, type2):
+        if type1.is_pointer:
+            return type1
+        elif type2.is_pointer:
+            return type2
+        elif type1.is_object or type2.is_object:
+            return object_
+        elif type1.is_numeric and type2.is_numeric:
+            return self.promote_numeric(type1, type2)
+        elif type1.is_array and type2:
+            return self.promote_arrays(type1, type2)
+        else:
+            raise minierror.UnpromotableTypeError((type1, type2))
+
+
 class Type(miniutils.ComparableObjectMixin):
     is_array = False
     is_pointer = False
@@ -109,7 +112,6 @@ class Type(miniutils.ComparableObjectMixin):
     is_char = False
     is_int = False
     is_float = False
-    is_double = False
     is_c_string = False
     is_object = False
     is_function = False
@@ -291,6 +293,14 @@ class BoolType(NamedType):
         return int8.to_llvm()
 
 class NumericType(NamedType):
+    """
+    Base class for numeric types.
+
+    Attributes:
+        name: name of the type
+        itemsize: sizeof(type)
+        rank: ordering of numeric types
+    """
     is_numeric = True
 
 class IntLike(NumericType):
@@ -315,23 +325,16 @@ class IntType(IntLike):
 
 class FloatType(NumericType):
     is_float = True
-    name = "float"
-    rank = 4
 
     def to_llvm(self, context):
-        if self.rank == 4:
+        if self.itemsize == 4:
             return lc.Type.float()
-        elif self.rank == 8:
+        elif self.itemsize == 8:
             return lc.Type.double()
         else:
             # Note: what about fp80/fp96?
-            assert self.rank == 16
+            assert self.itemsize == 16
             return lc.Type.fp128()
-
-class DoubleType(NumericType):
-    is_double = True
-    name = "double"
-    rank = 8
 
 class ComplexType(NumericType):
     is_complex = True
@@ -398,23 +401,23 @@ int_ = IntType()
 bool_ = BoolType()
 object_ = ObjectType()
 
-float32 = float_ = FloatType()
-float64 = double = DoubleType()
-float128 = longdouble = FloatType(rank=16)
+int8 = IntType(name="int8", rank=1, itemsize=1)
+int16 = IntType(name="int16", rank=2, itemsize=2)
+int32 = IntType(name="int32", rank=4, itemsize=4)
+int64 = IntType(name="int64", rank=8, itemsize=8)
 
-int8 = IntType(name="int8", rank=1)
-int16 = IntType(name="int16", rank=2)
-int32 = IntType(name="int32", rank=4)
-int64 = IntType(name="int64", rank=8)
+uint8 = IntType(name="uint8", rank=1.5, signed=False, itemsize=1)
+uint16 = IntType(name="int16", rank=2.5, signed=False, itemsize=2)
+uint32 = IntType(name="int32", rank=4.5, signed=False, itemsize=4)
+uint64 = IntType(name="int64", rank=8.5, signed=False, itemsize=8)
 
-uint8 = IntType(name="uint8", rank=1, signed=False)
-uint16 = IntType(name="int16", rank=2, signed=False)
-uint32 = IntType(name="int32", rank=4, signed=False)
-uint64 = IntType(name="int64", rank=8, signed=False)
+float32 = float_ = FloatType(name="float", rank=10, itemsize=4)
+float64 = double = FloatType(name="double", rank=12, itemsize=8)
+float128 = longdouble = FloatType(rank=14, itemsize=16)
 
-complex64 = ComplexType(name="complex64", rank=8)
-complex128 = ComplexType(name="complex128", rank=16)
-complex256 = ComplexType(name="complex256", rank=32)
+complex64 = ComplexType(name="complex64", rank=16, itemsize=8)
+complex128 = ComplexType(name="complex128", rank=18, itemsize=16)
+complex256 = ComplexType(name="complex256", rank=20, itemsize=32)
 
 if __name__ == '__main__':
     import doctest
