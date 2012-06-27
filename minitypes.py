@@ -1,6 +1,28 @@
 """
 Minimal type system. Don't call this module types, to avoid 'from .' imports
 and ensure 2.4 compatibility.
+
+>>> char
+char
+>>> int8[:, :]
+int8[:, :]
+>>> int8.signed
+True
+>>> uint8
+uint8
+>>> uint8.signed
+False
+
+>>> char.pointer()
+char *
+>>> int_[:, ::1]
+int[:, ::1]
+>>> int_[::1, :]
+int[::1, :]
+>>> double[:, ::1, :]
+Traceback (most recent call last):
+   ...
+InvalidTypeSpecification: Step may only be provided once, and only in the first or last dimension.
 """
 
 try:
@@ -107,24 +129,25 @@ class Type(miniutils.ComparableObjectMixin):
         return h
 
     def __getitem__(self, item):
-        assert isinstance(item (tuple, slice))
+        assert isinstance(item, (tuple, slice))
 
         def verify_slice(s):
-            if s.start or s.stop or s.step != 1:
+            if s.start or s.stop or s.step not in (None, 1):
                 raise minierror.InvalidTypeSpecification(
                     "Only a step of 1 may be provided to indicate C or "
                     "Fortran contiguity")
 
         if isinstance(item, tuple):
-            step = None
+            step_idx = None
             for idx, s in enumerate(item):
-                verify_slice(item)
+                verify_slice(s)
                 if (s.step and step_idx) or idx not in (0, len(item) - 1):
                     raise minierror.InvalidTypeSpecification(
                         "Step may only be provided once, and only in the "
                         "first or last dimension.")
 
-                step_idx = idx
+                if s.step == 1:
+                    step_idx = idx
 
             return ArrayType(self, len(item),
                              is_c_contig=step_idx == len(item) - 1,
@@ -161,7 +184,7 @@ class ArrayType(Type):
         raise Exception("Obtain a pointer to the dtype and convert that "
                         "to an LLVM type")
 
-    def __str__(self):
+    def __repr__(self):
         axes = [":"] * self.ndim
         if self.is_c_contig:
             axes[-1] = "::1"
@@ -183,7 +206,7 @@ class PointerType(Type):
             qualifiers = self.qualifiers
         return "%s *%s" % (self.base_type, " ".join(qualifiers))
 
-    def __str__(self):
+    def __repr__(self):
         return self.tostring()
 
     def to_llvm(self, context):
@@ -212,7 +235,7 @@ class CArrayType(Type):
         self.base_type = base_type
         self.size = size
 
-    def __str__(self):
+    def __repr__(self):
         return "%s[%d]" % (self.base_type, self.length)
 
     def to_llvm(self, context):
@@ -227,21 +250,23 @@ class TypeWrapper(Type):
         self.opaque_type = opaque_type
         self.context = context
 
-    def __str__(self):
+    def __repr__(self):
         return self.context.declare_type(self)
 
     def __deepcopy__(self, memo):
         return self
 
 class NamedType(Type):
-    def __str__(self):
-        return "%s %s" % (self.name, " ".join(self.qualifiers))
+    def __repr__(self):
+        if self.qualifiers:
+            return "%s %s" % (self.name, " ".join(self.qualifiers))
+        return self.name
 
 class BoolType(NamedType):
     is_bool = True
     name = "bool"
 
-    def __str__(self):
+    def __repr__(self):
         return "int %s" % " ".join(self.qualifiers)
 
     def to_llvm(self, context):
@@ -307,7 +332,7 @@ class CharType(IntLike):
 class CStringType(Type):
     is_c_string = True
 
-    def __str__(self):
+    def __repr__(self):
         return "const char *"
 
     def to_llvm(self):
@@ -323,7 +348,7 @@ class VoidType(NamedType):
 class ObjectType(Type):
     is_object = True
 
-    def __str__(self):
+    def __repr__(self):
         return "PyObject *"
 
 class FunctionType(Type):
@@ -356,12 +381,16 @@ float32 = float_ = FloatType()
 float64 = double = DoubleType()
 float128 = longdouble = FloatType(rank=16)
 
-int8 = char
+int8 = IntType(name="int8", rank=1)
 int16 = IntType(name="int16", rank=2)
 int32 = IntType(name="int32", rank=4)
 int64 = IntType(name="int64", rank=8)
 
-uint8 = uchar
-uint16 = IntType(name="int16", rank=2, signed=False)
-uint32 = IntType(name="int32", rank=4, signed=False)
-uint64 = IntType(name="int64", rank=8, signed=False)
+uint8 = IntType(name="uint8", rank=1, signed=False)
+uint16 = IntType(name="uint16", rank=2, signed=False)
+uint32 = IntType(name="uint32", rank=4, signed=False)
+uint64 = IntType(name="uint64", rank=8, signed=False)
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
