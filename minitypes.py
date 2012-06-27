@@ -2,6 +2,7 @@
 Minimal type system. Don't call this module types, to avoid 'from .' imports
 and ensure 2.4 compatibility.
 
+
 >>> char
 char
 >>> int8[:, :]
@@ -24,6 +25,11 @@ Traceback (most recent call last):
    ...
 InvalidTypeSpecification: Step may only be provided once, and only in the first or last dimension.
 """
+
+__all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'bool_', 'object_',
+           'float_', 'double', 'longdouble', 'float32', 'float64', 'float128',
+           'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
+           'complex64', 'complex128', 'complex256']
 
 try:
     import llvm.core as lc
@@ -81,6 +87,17 @@ class TypeMapper(object):
         "Return an LLVM type for the given type."
         raise NotImplementedError
 
+    def from_python(self, value):
+        if isinstance(value, float):
+            return double
+        elif isinstance(value, (int, long)):
+            return int_
+        elif isinstance(value, complex):
+            return complex128
+        else:
+            return object_
+            # raise minierror.UnmappableTypeError(type(value))
+
 class Type(miniutils.ComparableObjectMixin):
     is_array = False
     is_pointer = False
@@ -97,6 +114,7 @@ class Type(miniutils.ComparableObjectMixin):
     is_object = False
     is_function = False
     is_int_like = False
+    is_complex = False
 
     subtypes = []
 
@@ -315,6 +333,9 @@ class DoubleType(NumericType):
     name = "double"
     rank = 8
 
+class ComplexType(NumericType):
+    is_complex = True
+
 class Py_ssize_t_Type(IntLike):
     is_py_ssize_t = True
     name = "Py_ssize_t"
@@ -335,7 +356,7 @@ class CStringType(Type):
     def __repr__(self):
         return "const char *"
 
-    def to_llvm(self):
+    def to_llvm(self, context):
         return char.pointer().to_llvm()
 
 class VoidType(NamedType):
@@ -387,9 +408,13 @@ int32 = IntType(name="int32", rank=4)
 int64 = IntType(name="int64", rank=8)
 
 uint8 = IntType(name="uint8", rank=1, signed=False)
-uint16 = IntType(name="uint16", rank=2, signed=False)
-uint32 = IntType(name="uint32", rank=4, signed=False)
-uint64 = IntType(name="uint64", rank=8, signed=False)
+uint16 = IntType(name="int16", rank=2, signed=False)
+uint32 = IntType(name="int32", rank=4, signed=False)
+uint64 = IntType(name="int64", rank=8, signed=False)
+
+complex64 = ComplexType(name="complex64", rank=8)
+complex128 = ComplexType(name="complex128", rank=16)
+complex256 = ComplexType(name="complex256", rank=32)
 
 if __name__ == '__main__':
     import doctest
