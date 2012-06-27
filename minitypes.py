@@ -40,6 +40,57 @@ import miniutils
 import minierror
 
 class TypeMapper(object):
+    """
+    >>> import miniast
+    >>> context = miniast.Context()
+    >>> miniast.typemapper = TypeMapper(context)
+    >>> tm = context.typemapper
+
+    >>> tm.promote_types(int8, double)
+    double
+    >>> tm.promote_types(int8, uint8)
+    uint8
+    >>> tm.promote_types(int8, complex128)
+    complex128
+    >>> tm.promote_types(int8, object_)
+    PyObject *
+
+    >>> tm.promote_types(int64, float32)
+    float
+    >>> tm.promote_types(int64, complex64)
+    complex64
+    >>> tm.promote_types(float32, float64)
+    double
+    >>> tm.promote_types(float32, complex64)
+    complex64
+    >>> tm.promote_types(complex64, complex128)
+    complex128
+    >>> tm.promote_types(complex256, object_)
+    PyObject *
+
+    >>> tm.promote_types(float32.pointer(), Py_ssize_t)
+    float *
+    >>> tm.promote_types(float32.pointer(), Py_ssize_t)
+    float *
+    >>> tm.promote_types(float32.pointer(), uint8)
+    float *
+
+    >>> tm.promote_types(float32.pointer(), float64.pointer())
+    Traceback (most recent call last):
+        ...
+    UnpromotableTypeError: (float *, double *)
+
+    >>> tm.promote_types(float32[:, ::1], float32[:, ::1])
+    float[:, ::1]
+    >>> tm.promote_types(float32[:, ::1], float64[:, ::1])
+    double[:, ::1]
+    >>> tm.promote_types(float32[:, ::1], float64[::1, :])
+    double[:, :]
+    >>> tm.promote_types(float32[:, :], complex128[:, :])
+    complex128[:, :]
+    >>> tm.promote_types(int_[:, :], object_[:, ::1])
+    PyObject *[:, :]
+    """
     def __init__(self, context):
         self.context = context
 
@@ -87,9 +138,9 @@ class TypeMapper(object):
                                       type2.is_f_contig))
 
     def promote_types(self, type1, type2):
-        if type1.is_pointer:
+        if type1.is_pointer and type2.is_int_like:
             return type1
-        elif type2.is_pointer:
+        elif type2.is_pointer and type2.is_int_like:
             return type2
         elif type1.is_object or type2.is_object:
             return object_
