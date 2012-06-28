@@ -168,6 +168,7 @@ class Type(miniutils.ComparableObjectMixin):
     is_function = False
     is_int_like = False
     is_complex = False
+    is_void = False
 
     subtypes = []
 
@@ -328,6 +329,9 @@ class TypeWrapper(Type):
         return self
 
 class NamedType(Type):
+    def __eq__(self, other):
+        return isinstance(other, NamedType) and self.name == other.name
+
     def __repr__(self):
         if self.qualifiers:
             return "%s %s" % (self.name, " ".join(self.qualifiers))
@@ -389,6 +393,7 @@ class FloatType(NumericType):
 
 class ComplexType(NumericType):
     is_complex = True
+    subtypes = ['base_type']
 
 class Py_ssize_t_Type(IntLike):
     is_py_ssize_t = True
@@ -458,17 +463,20 @@ int32 = IntType(name="int32", rank=4, itemsize=4)
 int64 = IntType(name="int64", rank=8, itemsize=8)
 
 uint8 = IntType(name="uint8", rank=1.5, signed=False, itemsize=1)
-uint16 = IntType(name="int16", rank=2.5, signed=False, itemsize=2)
-uint32 = IntType(name="int32", rank=4.5, signed=False, itemsize=4)
-uint64 = IntType(name="int64", rank=8.5, signed=False, itemsize=8)
+uint16 = IntType(name="uint16", rank=2.5, signed=False, itemsize=2)
+uint32 = IntType(name="uint32", rank=4.5, signed=False, itemsize=4)
+uint64 = IntType(name="uint64", rank=8.5, signed=False, itemsize=8)
 
 float32 = float_ = FloatType(name="float", rank=10, itemsize=4)
 float64 = double = FloatType(name="double", rank=12, itemsize=8)
 float128 = longdouble = FloatType(rank=14, itemsize=16)
 
-complex64 = ComplexType(name="complex64", rank=16, itemsize=8)
-complex128 = ComplexType(name="complex128", rank=18, itemsize=16)
-complex256 = ComplexType(name="complex256", rank=20, itemsize=32)
+complex64 = ComplexType(name="complex64", base_type=float32,
+                        rank=16, itemsize=8)
+complex128 = ComplexType(name="complex128", base_type=float64,
+                         rank=18, itemsize=16)
+complex256 = ComplexType(name="complex256", base_type=float128,
+                         rank=20, itemsize=32)
 
 if __name__ == '__main__':
     import doctest
