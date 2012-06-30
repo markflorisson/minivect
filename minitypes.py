@@ -26,7 +26,7 @@ Traceback (most recent call last):
 InvalidTypeSpecification: Step may only be provided once, and only in the first or last dimension.
 """
 
-__all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'bool_', 'object_',
+__all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'long_', 'bool_', 'object_',
            'float_', 'double', 'longdouble', 'float32', 'float64', 'float128',
            'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
            'complex64', 'complex128', 'complex256']
@@ -459,7 +459,8 @@ void = VoidType()
 Py_ssize_t = Py_ssize_t_Type()
 char = CharType()
 uchar = CharType(signed=False)
-int_ = IntType()
+int_ = IntType(name="int", rank=4, itemsize=4)
+long_ = IntType(name="long", rank=5, itemsize=4)
 bool_ = BoolType()
 object_ = ObjectType()
 

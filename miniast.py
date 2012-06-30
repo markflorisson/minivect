@@ -89,7 +89,7 @@ class Context(object):
         raise NotImplementedError
 
     def to_llvm(self, type):
-        self.typemapper.to_llvm(type)
+        return self.typemapper.to_llvm(type)
 
 
 class CContext(Context):
