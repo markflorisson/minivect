@@ -231,6 +231,11 @@ class Type(miniutils.ComparableObjectMixin):
     def to_llvm(self, context):
         return context.to_llvm(self)
 
+    def __getattr__(self, attr):
+        if attr.startswith('is_'):
+            return False
+        raise AttributeError(attr)
+
 class ArrayType(Type):
 
     is_array = True
@@ -282,7 +287,7 @@ class PointerType(Type):
         return self.tostring()
 
     def to_llvm(self, context):
-        return lc.Type.pointer(self.base_type.to_llvm())
+        return lc.Type.pointer(self.base_type.to_llvm(context))
 
 class MutablePointerType(Type):
     subtypes = ['pointer_type']
@@ -366,6 +371,7 @@ class IntType(IntLike):
     name = "int"
     signed = True
     rank = 4
+    itemsize = 4
 
     def to_llvm(self, context):
         if self.rank == 1:
