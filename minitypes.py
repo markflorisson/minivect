@@ -174,7 +174,21 @@ class Type(miniutils.ComparableObjectMixin):
 
     def __init__(self, **kwds):
         vars(self).update(kwds)
-        self.qualifiers = set()
+        self.qualifiers = kwds.get('qualifiers', frozenset())
+
+    def qualify(self, *qualifiers):
+        qualifiers = list(qualifiers)
+        qualifiers.extend(self.qualifiers)
+        attribs = dict(vars(self), qualifiers=qualifiers)
+        print self
+        return type(self)(**attribs)
+
+    def unqualify(self, *unqualifiers):
+        unqualifiers = set(unqualifiers)
+        qualifiers = [q for q in self.qualifiers if q not in unqualifiers]
+        attribs = dict(vars(self), qualifiers=qualifiers)
+        print self
+        return type(self)(**attribs)
 
     def pointer(self):
         return PointerType(self)
@@ -274,41 +288,22 @@ class PointerType(Type):
     is_pointer = True
     subtypes = ['base_type']
 
-    def __init__(self, base_type):
-        super(PointerType, self).__init__()
+    def __init__(self, base_type, **kwds):
+        super(PointerType, self).__init__(**kwds)
         self.base_type = base_type
 
-    def tostring(self, qualifiers=None):
-        if qualifiers is None:
-            qualifiers = self.qualifiers
-        return "%s *%s" % (self.base_type, " ".join(qualifiers))
-
     def __repr__(self):
-        return self.tostring()
+        return "%s *%s" % (self.base_type, " ".join(self.qualifiers))
 
     def to_llvm(self, context):
         return lc.Type.pointer(self.base_type.to_llvm(context))
-
-class MutablePointerType(Type):
-    subtypes = ['pointer_type']
-
-    def __init__(self, pointer_type):
-        super(MutablePointerType, self).__init__()
-        self.pointer_type = pointer_type
-
-    def tostring(self):
-        qualifiers = self.pointer_type.qualifiers - set(['const'])
-        return self.pointer_type.tostring(qualifiers=qualifiers)
-
-    def __getattr__(self, attr):
-        return getattr(self.pointer_type, attr)
 
 class CArrayType(Type):
     is_carray = True
     subtypes = ['base_type']
 
-    def __init__(self, base_type, size):
-        super(CArrayType, self).__init__()
+    def __init__(self, base_type, size, **kwds):
+        super(CArrayType, self).__init__(**kwds)
         self.base_type = base_type
         self.size = size
 
@@ -322,8 +317,8 @@ class TypeWrapper(Type):
     is_typewrapper = True
     subtypes = ['opaque_type']
 
-    def __init__(self, opaque_type, context):
-        super(TypeWrapper, self).__init__()
+    def __init__(self, opaque_type, context, **kwds):
+        super(TypeWrapper, self).__init__(**kwds)
         self.opaque_type = opaque_type
         self.context = context
 

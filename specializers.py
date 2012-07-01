@@ -312,8 +312,7 @@ class StridedCInnerContigSpecializer(StridedSpecializer):
         stats = []
         for arg in self.function.arguments:
             if arg.is_array_funcarg:
-                dest_pointer_type = minitypes.MutablePointerType(
-                                                arg.data_pointer.type)
+                dest_pointer_type = arg.data_pointer.type.unqualify('const')
                 pointer = b.temp(dest_pointer_type)
 
                 sup = super(StridedCInnerContigSpecializer, self)
