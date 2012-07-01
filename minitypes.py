@@ -180,14 +180,12 @@ class Type(miniutils.ComparableObjectMixin):
         qualifiers = list(qualifiers)
         qualifiers.extend(self.qualifiers)
         attribs = dict(vars(self), qualifiers=qualifiers)
-        print self
         return type(self)(**attribs)
 
     def unqualify(self, *unqualifiers):
         unqualifiers = set(unqualifiers)
         qualifiers = [q for q in self.qualifiers if q not in unqualifiers]
         attribs = dict(vars(self), qualifiers=qualifiers)
-        print self
         return type(self)(**attribs)
 
     def pointer(self):

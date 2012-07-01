@@ -77,6 +77,8 @@ class Specializer(ASTMapper):
                     stats.append(b.print_(b.constant("strides operand%d:" % idx),
                                           *self._index_list(arg.strides_pointer,
                                                             arg.type.ndim)))
+                    stats.append(b.print_(b.constant("data pointer %d:" % idx),
+                                          arg.data_pointer))
 
         node.body = b.stats(b.stats(*stats), node.body)
 
@@ -205,12 +207,14 @@ class StridedSpecializer(OrderedSpecializer):
 
         return super(StridedSpecializer, self).visit_Variable(node)
 
-    def _element_location(self, node, indices=None):
+    def _element_location(self, node, indices=None, strides_index_offset=0,
+                          ndim=None):
         indices = indices or self.indices
         b = self.astbuilder
-        ndim = node.type.ndim
-        indices = [b.mul(index, b.stride(node, i))
-                   for i, index in enumerate(indices[-ndim:])]
+        if ndim is None:
+            ndim = node.type.ndim
+        indices = [b.mul(index, b.stride(node, i + strides_index_offset))
+                       for i, index in enumerate(indices[len(indices) - ndim:])]
         pointer = b.cast(b.data_pointer(node),
                          minitypes.char.pointer())
         node = b.index_multiple(pointer, indices,
@@ -233,7 +237,7 @@ class ContigSpecializer(StridedSpecializer):
         # compute the product of the shape and insert it into the function body
         extents = [b.index(node.shape, b.constant(i))
                        for i in range(node.ndim)]
-        node.total_shape = b.temp(node.shape.type.base_type)
+        node.total_shape = b.temp(node.shape.type.base_type.unqualify("const"))
         init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
         node.body = b.stats(init_shape, node.body)
 
@@ -317,7 +321,9 @@ class StridedCInnerContigSpecializer(StridedSpecializer):
 
                 sup = super(StridedCInnerContigSpecializer, self)
                 first_element_pointer = sup._element_location(
-                                    arg, indices=self.strided_indices())
+                                    arg, indices=self.strided_indices(),
+                                    strides_index_offset=self.order == 'F',
+                                    ndim=arg.type.ndim - 1)
                 stats.append(b.assign(pointer, first_element_pointer.operand))
                 self.pointers[arg.variable] = pointer
 
