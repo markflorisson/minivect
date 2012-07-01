@@ -143,7 +143,7 @@ class ASTBuilder(object):
         arguments.insert(0, self.funcarg(shapevar))
         if posinfo:
             arguments.insert(1, posinfo)
-        body = NDIterate(self.pos, body)
+        body = self.nditerate(body)
         return FunctionNode(self.pos, name, body, arguments, scalar_arguments,
                             shapevar, posinfo,
                             error_value=self.constant(-1),
@@ -188,6 +188,9 @@ class ASTBuilder(object):
     def funcref(self, function):
         return FuncRefNode(self.pos, type=function.type, function=function)
 
+    def nditerate(self, body):
+        return NDIterate(self.pos, body)
+
     def for_(self, body, init, condition, step, is_tiled=False):
         return ForNode(self.pos, init, condition, step, body, is_tiled)
 
@@ -205,6 +208,12 @@ class ASTBuilder(object):
         result = self.for_(body, init, condition, step)
         result.target = temp
         return result
+
+    def omp_for(self, for_node, if_clause=None):
+        if if_clause is None:
+            if_clause = self.constant(1)
+        return OpenMPLoopNode(self.pos, for_node=for_node,
+                              if_clause=if_clause)
 
     def stats(self, *statements):
         stats = []
@@ -695,6 +704,12 @@ class TempNode(Variable):
 
     def __hash__(self):
         return hash(id(self))
+
+class OpenMPLoopNode(Node):
+    """
+    Execute a loop in parallel.
+    """
+    child_attrs = ['for_node', 'if_clause']
 
 class ErrorHandler(Node):
     """

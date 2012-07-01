@@ -137,11 +137,17 @@ class CCodeGen(CodeGen):
         self.code.putln('%s\\n", %s);' % ("".join(output).rstrip(),
                                           ", ".join(self.results(*node.args))))
 
+    def visit_OpenMPLoopNode(self, node):
+        self.code.putln("#ifdef _OPENMP")
+        self.code.putln("#pragma omp parallel for if(%s)" % self.visit(node.if_clause))
+        self.code.putln("#endif")
+        self.visit(node.for_node)
+
     def visit_ForNode(self, node):
         code = self.code
 
         exprs = self.results(node.init, node.condition, node.step)
-        code.putln("for (%s; %s; %s) {" % exprs)
+        code.putln("for (%s; %s; %s) {" % tuple(self.strip(e) for e in exprs))
 
         if not node.is_tiled:
             self.code.declaration_levels.append(code.insertion_point())
@@ -187,7 +193,7 @@ class CCodeGen(CodeGen):
             node.name = "%s%d" % (self.code.mangle(node.name),
                                   len(self.declared_temps))
             self.declared_temps.add(node)
-            code = self.code.declaration_levels[0]
+            code = self.code.declaration_levels[-1]
             code.putln("%s %s;" % (node.type, node.name))
 
         return node.name

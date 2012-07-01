@@ -199,7 +199,9 @@ class StridedSpecializer(OrderedSpecializer):
     def visit_NDIterate(self, node):
         b = self.astbuilder
         self.indices = []
-        return self.visit(self.ordered_loop(node.body, self.indices))
+        node = self.ordered_loop(node.body, self.indices)
+        node = b.omp_for(node)
+        return self.visit(node)
 
     def visit_Variable(self, node):
         if node.name in self.function.args and node.type.is_array:
@@ -244,11 +246,11 @@ class ContigSpecializer(StridedSpecializer):
         return super(ContigSpecializer, self).visit_FunctionNode(node)
 
     def visit_NDIterate(self, node):
-        node = self.astbuilder.for_range_upwards(
-                        node.body, upper=self.function.total_shape)
-        self.target = node.target
-        self.visitchildren(node)
-        return node
+        b = self.astbuilder
+        node = b.omp_for(b.for_range_upwards(
+                    node.body, upper=self.function.total_shape))
+        self.target = node.for_node.target
+        return self.visit(node)
 
     def visit_StridePointer(self, node):
         return None
@@ -276,6 +278,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
         tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
         body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
                                  step=self.blocksize)
+        body = b.omp_for(body)
         del tiled_loop_body.stats[:]
 
         upper_limits = []
@@ -328,7 +331,7 @@ class StridedCInnerContigSpecializer(StridedSpecializer):
                 self.pointers[arg.variable] = pointer
 
         loop.body = b.stats(*(stats + [loop.body]))
-        return self.visit(node)
+        return self.visit(b.omp_for(node))
 
     def strided_indices(self):
         return self.indices[:-1]
