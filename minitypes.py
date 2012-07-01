@@ -234,7 +234,7 @@ class Type(miniutils.ComparableObjectMixin):
     def __getattr__(self, attr):
         if attr.startswith('is_'):
             return False
-        raise AttributeError(attr)
+        raise AttributeError("%s: %s" % (type(self), attr))
 
 class ArrayType(Type):
 
@@ -334,6 +334,7 @@ class TypeWrapper(Type):
         return self
 
 class NamedType(Type):
+    name = None
     def __eq__(self, other):
         return isinstance(other, NamedType) and self.name == other.name
 
@@ -457,10 +458,19 @@ void = VoidType()
 ### Public types
 #
 Py_ssize_t = Py_ssize_t_Type()
-char = CharType()
-uchar = CharType(signed=False)
+char = CharType(name="char")
+short = IntType(name="short", rank=2, itemsize=2)
 int_ = IntType(name="int", rank=4, itemsize=4)
 long_ = IntType(name="long", rank=5, itemsize=4)
+longlong = IntType(name="PY_LONG_LONG", rank=8, itemsize=8)
+
+uchar = CharType(name="unsigned char", signed=False)
+ushort = IntType(name="unsigned short", rank=2.5, itemsize=2, signed=False)
+uint = IntType(name="unsigned int", rank=4.5, itemsize=4, signed=False)
+ulong = IntType(name="unsigned long", rank=5.5, itemsize=4, signed=False)
+ulonglong = IntType(name="unsigned PY_LONG_LONG", rank=8.5, itemsize=8,
+                    signed=False)
+
 bool_ = BoolType()
 object_ = ObjectType()
 
@@ -476,7 +486,7 @@ uint64 = IntType(name="uint64", rank=8.5, signed=False, itemsize=8)
 
 float32 = float_ = FloatType(name="float", rank=10, itemsize=4)
 float64 = double = FloatType(name="double", rank=12, itemsize=8)
-float128 = longdouble = FloatType(rank=14, itemsize=16)
+float128 = longdouble = FloatType(name="long double", rank=14, itemsize=16)
 
 complex64 = ComplexType(name="complex64", base_type=float32,
                         rank=16, itemsize=8)
