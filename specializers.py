@@ -156,37 +156,47 @@ class Specializer(ASTMapper):
         return node
 
 class OrderedSpecializer(Specializer):
-    def loop_order(self, order):
+    def loop_order(self, order, ndim=None):
+        if ndim is None:
+            ndim = self.function.ndim
+
         if order == "C":
-            return self.c_loop_order()
+            return self.c_loop_order(ndim)
         else:
-            return self.f_loop_order()
+            return self.f_loop_order(ndim)
 
-    def c_loop_order(self):
-        return self.function.ndim - 1, -1, -1
+    def c_loop_order(self, ndim):
+        return ndim - 1, -1, -1
 
-    def f_loop_order(self):
-        return 0, self.function.ndim, 1
+    def f_loop_order(self, ndim):
+        return 0, ndim, 1
+
+    def order_indices(self, indices):
+        """
+        Put the indices of the for loops in the right iteration order.
+        """
+        if self.order == "C":
+            indices.reverse()
 
     def ordered_loop(self, node, result_indices, lower=None, upper=None,
-                     step=None):
+                     step=None, loop_order=None):
         b = self.astbuilder
 
         if lower is None:
             lower = lambda i: None
         if upper is None:
             upper = lambda i: b.shape_index(i, self.function)
+        if loop_order is None:
+            loop_order = self.loop_order(self.order)
 
         indices = []
         # print range(*self.loop_order(self.order))
-        for i in range(*self.loop_order(self.order)):
+        for i in range(*loop_order):
             node = b.for_range_upwards(node, lower=lower(i), upper=upper(i),
                                        step=step)
             indices.append(node.target)
 
-        if self.order == "C":
-            indices.reverse()
-
+        self.order_indices(indices)
         result_indices.extend(indices)
         return node
 
@@ -268,7 +278,81 @@ class CTiledStridedSpecializer(StridedSpecializer):
     def get_blocksize(self):
         return self.astbuilder.constant(128)
 
+    def tiled_order(self):
+        "Tile in the last two dimensions"
+        return self.function.ndim - 1, self.function.ndim - 1 - 2, -1
+
+    def untiled_order(self):
+        return self.function.ndim - 1 - 2, -1, -1
+
     def visit_NDIterate(self, node):
+        return self._tile_in_two_dimensions(node)
+
+    def _tile_in_two_dimensions(self, node):
+        """
+        This version generates tiling loops in the first or last two dimensions
+        (depending on C or Fortran order).
+        """
+        b = self.astbuilder
+
+        self.tiled_indices = []
+        self.indices = []
+        self.blocksize = self.get_blocksize()
+
+        tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
+        body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
+                                 step=self.blocksize,
+                                 loop_order=self.tiled_order())
+        body = b.omp_for(body)
+        del tiled_loop_body.stats[:]
+
+        upper_limits = {}
+        stats = []
+        tiled_order = range(*self.tiled_order())
+        for i, index in zip(tiled_order, self.tiled_indices):
+            upper_limit = b.temp(index.type)
+            tiled_loop_body.stats.append(
+                b.assign(upper_limit, b.min(b.add(index, self.blocksize),
+                                            b.shape_index(i, self.function))))
+            upper_limits[i] = upper_limit
+
+        tiled_indices = dict(zip(tiled_order, self.tiled_indices))
+        def lower(i):
+            if i in tiled_indices:
+                return tiled_indices[i]
+            return None
+
+        def upper(i):
+            if i in upper_limits:
+                return upper_limits[i]
+            return b.shape_index(i, self.function)
+
+        outer_for_node = node.body
+        inner_body = node.body
+        tiled_loop_body.stats.append(self.ordered_loop(
+                node.body, self.indices,
+                lower=lower, upper=upper,
+                loop_order=self.tiled_order()))
+
+        indices = []
+        body = self.ordered_loop(body, indices,
+                                 loop_order=self.untiled_order())
+
+        # At this point, 'self.indices' are the indices of the tiled loop
+        # (the indices in the first two dimensions for Fortran,
+        #  the indices in the last two # dimensions for C)
+        # 'indices' are the indices of the outer loops
+        if self.order == "C":
+            self.indices = indices + self.indices
+        else:
+            self.indices = self.indices + indices
+
+        return self.visit(body)
+
+    def _tile_in_all_dimensions(self, node):
+        """
+        This version generates tiling loops in all dimensions.
+        """
         b = self.astbuilder
 
         self.tiled_indices = []
@@ -291,15 +375,23 @@ class CTiledStridedSpecializer(StridedSpecializer):
             upper_limits.append(upper_limit)
 
         tiled_loop_body.stats.append(self.ordered_loop(
-                node.body, self.indices,
-                lower=lambda i: self.tiled_indices[i],
-                upper=lambda i: upper_limits[i]))
+            node.body, self.indices,
+            lower=lambda i: self.tiled_indices[i],
+            upper=lambda i: upper_limits[i]))
         return self.visit(body)
 
 class FTiledStridedSpecializer(CTiledStridedSpecializer):
 
     specialization_name = "tiled_fortran"
     order = "F"
+
+    def tiled_order(self):
+        "Tile in the first two dimensions"
+        return 0, 2, 1
+
+    def untiled_order(self):
+        return 2, self.function.ndim, 1
+
 
 class StridedCInnerContigSpecializer(StridedSpecializer):
 
