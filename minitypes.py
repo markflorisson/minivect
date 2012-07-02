@@ -451,6 +451,7 @@ void = VoidType()
 ### Public types
 #
 Py_ssize_t = Py_ssize_t_Type()
+size_t = IntType(name="size_t", rank=8.5, itemsize=8, signed=False)
 char = CharType(name="char")
 short = IntType(name="short", rank=2, itemsize=2)
 int_ = IntType(name="int", rank=4, itemsize=4)

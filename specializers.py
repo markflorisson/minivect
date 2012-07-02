@@ -70,6 +70,8 @@ class Specializer(ASTMapper):
             b.print_(b.constant("shape:"), *self._index_list(node.shape,
                                                              node.ndim)),
         ]
+        if self.is_tiled_specializer:
+            stats.append(b.print_(b.constant("blocksize:"), self.get_blocksize()))
 
         if not self.is_contig_specializer:
             for idx, arg in enumerate(node.arguments):
