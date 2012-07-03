@@ -158,6 +158,10 @@ class Specializer(ASTMapper):
         return node
 
 class OrderedSpecializer(Specializer):
+    """
+    Specializer that understands C and Fortran data layout orders.
+    """
+
     def loop_order(self, order, ndim=None):
         if ndim is None:
             ndim = self.function.ndim
@@ -175,13 +179,20 @@ class OrderedSpecializer(Specializer):
 
     def order_indices(self, indices):
         """
-        Put the indices of the for loops in the right iteration order.
+        Put the indices of the for loops in the right iteration order. The
+        loops were build backwards (Fortran order), so for C we need to
+        reverse them.
+
+        Note: the indices are always ordered on the dimension they index
         """
         if self.order == "C":
             indices.reverse()
 
     def ordered_loop(self, node, result_indices, lower=None, upper=None,
                      step=None, loop_order=None):
+        """
+        Return a loop ordered in C or Fortran order.
+        """
         b = self.astbuilder
 
         if lower is None:
@@ -202,45 +213,145 @@ class OrderedSpecializer(Specializer):
         result_indices.extend(indices)
         return node
 
-class StridedSpecializer(OrderedSpecializer):
-
-    specialization_name = "strided"
-
-    order = "C"
-
-    def visit_NDIterate(self, node):
-        b = self.astbuilder
-        self.indices = []
-        node = self.ordered_loop(node.body, self.indices)
-        node = b.omp_for(node)
-        return self.visit(node)
-
     def visit_Variable(self, node):
         if node.name in self.function.args and node.type.is_array:
             return self._element_location(node)
 
-        return super(StridedSpecializer, self).visit_Variable(node)
+        return super(OrderedSpecializer, self).visit_Variable(node)
 
-    def _element_location(self, node, indices=None, strides_index_offset=0,
-                          ndim=None):
+    def _index_pointer(self, pointer, indices, strides):
+        b = self.astbuilder
+        return b.index_multiple(
+            b.cast(pointer, minitypes.char.pointer()),
+            [b.mul(index, stride) for index, stride in zip(indices, strides)],
+            dest_pointer_type=pointer.type)
+
+    def _strided_element_location(self, node, indices=None, strides_index_offset=0,
+                                  ndim=None):
         indices = indices or self.indices
         b = self.astbuilder
         if ndim is None:
             ndim = node.type.ndim
-        indices = [b.mul(index, b.stride(node, i + strides_index_offset))
-                       for i, index in enumerate(indices[len(indices) - ndim:])]
-        pointer = b.cast(b.data_pointer(node),
-                         minitypes.char.pointer())
-        node = b.index_multiple(pointer, indices,
-                                dest_pointer_type=node.type.dtype.pointer())
+
+        indices = [index for index in indices[len(indices) - ndim:]]
+        strides = [b.stride(node, i + strides_index_offset)
+                       for i, idx in enumerate(indices)]
+        node = self._index_pointer(b.data_pointer(node), indices, strides)
         self.visitchildren(node)
         return node
 
-class StridedFortranSpecializer(StridedSpecializer):
+class StridedCInnerContigSpecializer(OrderedSpecializer):
+
+    specialization_name = "inner_contig_c"
+    order = "C"
+
+    def __init__(self, context, specialization_name=None):
+        super(StridedCInnerContigSpecializer, self).__init__(context,
+                                                             specialization_name)
+        self.indices = []
+        self.pointers = {}
+
+    def _compute_inner_dim_pointer(self, arg, stats):
+        """
+        Compute the pointer to each 'row'.
+
+        In the case of Fortran, offset strides by one, since we want all
+        strides but the first.
+        In the case of C, we want all strides except the last.
+
+        (indices is already offset through the strided_indices()
+        method)
+
+        arg: the array function argument
+        stats: list of statements we append to
+        """
+        b = self.astbuilder
+
+        dest_pointer_type = arg.data_pointer.type.unqualify('const')
+        pointer = b.temp(dest_pointer_type)
+        first_element_pointer = self._strided_element_location(
+            arg, indices=self.strided_indices(),
+            strides_index_offset=self.order == 'F',
+            ndim=arg.type.ndim - 1)
+        stats.append(b.assign(pointer, first_element_pointer.operand))
+        self.pointers[arg.variable] = pointer
+
+    def visit_NDIterate(self, node):
+        b = self.astbuilder
+        # start by generating a C or Fortran ordered loop
+        node = self.ordered_loop(node.body, self.indices)
+
+        # get the second to last loop node, since its body is the
+        # penultimate loop node
+        loop = node
+        for index in self.indices[:-2]:
+            loop = node.body
+
+        stats = []
+        for arg in self.function.arguments:
+            if arg.is_array_funcarg:
+                self._compute_inner_dim_pointer(arg, stats)
+
+        loop.body = b.stats(*(stats + [loop.body]))
+        return self.visit(b.omp_for(node))
+
+    def strided_indices(self):
+        return self.indices[:-1]
+
+    def contig_index(self):
+        return self.indices[-1]
+
+    def _element_location(self, variable):
+        data_pointer = self.pointers[variable]
+        return self.astbuilder.index(data_pointer, self.contig_index())
+
+class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
+
+    order = "F"
+    specialization_name = "inner_contig_fortran"
+
+    def strided_indices(self):
+        return self.indices[1:]
+
+    def contig_index(self):
+        return self.indices[0]
+
+class StridedSpecializer(StridedCInnerContigSpecializer):
+
+    specialization_name = "strided"
+    order = "C"
+
+    def matching_contiguity(self, type):
+        return ((type.is_c_contig and self.order == "C") or
+                (type.is_f_contig and self.order == "F"))
+
+    def _compute_inner_dim_pointer(self, arg, stats):
+        #if self.matching_contiguity(arg.type):
+        super(StridedSpecializer, self)._compute_inner_dim_pointer(arg, stats)
+
+    def _element_location(self, variable):
+        #if variable in self.pointers:
+        if self.matching_contiguity(variable.type):
+            return super(StridedSpecializer, self)._element_location(variable)
+
+        b = self.astbuilder
+        pointer = self.pointers[variable]
+        indices = [self.contig_index()]
+
+        if self.order == "C":
+            inner_dim = variable.type.ndim - 1
+        else:
+            inner_dim = 0
+
+        strides = [b.stride(variable, inner_dim)]
+        return self._index_pointer(pointer, indices, strides)
+
+class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
+                                StridedSpecializer):
     specialization_name = "strided_fortran"
     order = "F"
 
-class ContigSpecializer(StridedSpecializer):
+class ContigSpecializer(OrderedSpecializer):
 
     specialization_name = "contig"
     is_contig_specializer = True
@@ -271,7 +382,7 @@ class ContigSpecializer(StridedSpecializer):
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
 
-class CTiledStridedSpecializer(StridedSpecializer):
+class CTiledStridedSpecializer(OrderedSpecializer):
 
     specialization_name = "tiled_c"
     order = "C"
@@ -382,6 +493,9 @@ class CTiledStridedSpecializer(StridedSpecializer):
             upper=lambda i: upper_limits[i]))
         return self.visit(body)
 
+    def _element_location(self, variable):
+        return self._strided_element_location(variable)
+
 class FTiledStridedSpecializer(CTiledStridedSpecializer):
 
     specialization_name = "tiled_fortran"
@@ -393,57 +507,3 @@ class FTiledStridedSpecializer(CTiledStridedSpecializer):
 
     def untiled_order(self):
         return 2, self.function.ndim, 1
-
-
-class StridedCInnerContigSpecializer(StridedSpecializer):
-
-    specialization_name = "inner_contig_c"
-    order = "C"
-
-    def visit_NDIterate(self, node):
-        b = self.astbuilder
-        self.indices = []
-        node = self.ordered_loop(node.body, self.indices)
-
-        loop = node
-        for index in self.indices[:-2]:
-            loop = node.body
-
-        self.pointers = {}
-        stats = []
-        for arg in self.function.arguments:
-            if arg.is_array_funcarg:
-                dest_pointer_type = arg.data_pointer.type.unqualify('const')
-                pointer = b.temp(dest_pointer_type)
-
-                sup = super(StridedCInnerContigSpecializer, self)
-                first_element_pointer = sup._element_location(
-                                    arg, indices=self.strided_indices(),
-                                    strides_index_offset=self.order == 'F',
-                                    ndim=arg.type.ndim - 1)
-                stats.append(b.assign(pointer, first_element_pointer.operand))
-                self.pointers[arg.variable] = pointer
-
-        loop.body = b.stats(*(stats + [loop.body]))
-        return self.visit(b.omp_for(node))
-
-    def strided_indices(self):
-        return self.indices[:-1]
-
-    def contig_index(self):
-        return self.indices[-1]
-
-    def _element_location(self, variable):
-        data_pointer = self.pointers[variable]
-        return self.astbuilder.index(data_pointer, self.contig_index())
-
-class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
-
-    order = "F"
-    specialization_name = "inner_contig_fortran"
-
-    def strided_indices(self):
-        return self.indices[1:]
-
-    def contig_index(self):
-        return self.indices[0]
