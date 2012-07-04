@@ -86,6 +86,7 @@ class Specializer(ASTMapper):
 
     def visit_FunctionNode(self, node):
         b = self.astbuilder
+        self.compute_total_shape(node)
 
         # set this so bad people can specialize during code generation time
         node.specializer = self
@@ -157,10 +158,30 @@ class Specializer(ASTMapper):
         self.error_handlers.pop()
         return node
 
+    def omp_for(self, node):
+        if_clause = self.astbuilder.binop(minitypes.bool_, '>',
+                                          self.function.total_shape,
+                                          self.function.omp_size)
+        return self.astbuilder.omp_for(node, if_clause)
+
 class OrderedSpecializer(Specializer):
     """
     Specializer that understands C and Fortran data layout orders.
     """
+
+    def compute_total_shape(self, node):
+        """
+        Compute the product of the shape (entire length of array output).
+        Sets the total shape as attribute of the function (total_shape).
+        """
+        b = self.astbuilder
+        # compute the product of the shape and insert it into the function body
+        extents = [b.index(node.shape, b.constant(i))
+                   for i in range(node.ndim)]
+        node.total_shape = b.temp(node.shape.type.base_type.unqualify("const"))
+        init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
+        node.body = b.stats(init_shape, node.body)
+        return node.total_shape
 
     def loop_order(self, order, ndim=None):
         if ndim is None:
@@ -293,7 +314,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
                 self._compute_inner_dim_pointer(arg, stats)
 
         loop.body = b.stats(*(stats + [loop.body]))
-        return self.visit(b.omp_for(node))
+        return self.visit(self.omp_for(node))
 
     def strided_indices(self):
         return self.indices[:-1]
@@ -356,21 +377,9 @@ class ContigSpecializer(OrderedSpecializer):
     specialization_name = "contig"
     is_contig_specializer = True
 
-    def visit_FunctionNode(self, node):
-        b = self.astbuilder
-
-        # compute the product of the shape and insert it into the function body
-        extents = [b.index(node.shape, b.constant(i))
-                       for i in range(node.ndim)]
-        node.total_shape = b.temp(node.shape.type.base_type.unqualify("const"))
-        init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
-        node.body = b.stats(init_shape, node.body)
-
-        return super(ContigSpecializer, self).visit_FunctionNode(node)
-
     def visit_NDIterate(self, node):
         b = self.astbuilder
-        node = b.omp_for(b.for_range_upwards(
+        node = self.omp_for(b.for_range_upwards(
                     node.body, upper=self.function.total_shape))
         self.target = node.for_node.target
         return self.visit(node)
@@ -416,7 +425,7 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
                                  step=self.blocksize,
                                  loop_order=self.tiled_order())
-        body = b.omp_for(body)
+        body = self.omp_for(body)
         del tiled_loop_body.stats[:]
 
         upper_limits = {}
@@ -475,7 +484,7 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
         body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
                                  step=self.blocksize)
-        body = b.omp_for(body)
+        body = self.omp_for(body)
         del tiled_loop_body.stats[:]
 
         upper_limits = []

@@ -209,9 +209,7 @@ class ASTBuilder(object):
         result.target = temp
         return result
 
-    def omp_for(self, for_node, if_clause=None):
-        if if_clause is None:
-            if_clause = self.constant(1)
+    def omp_for(self, for_node, if_clause):
         return OpenMPLoopNode(self.pos, for_node=for_node,
                               if_clause=if_clause)
 
