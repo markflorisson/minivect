@@ -5,8 +5,8 @@ and ensure 2.4 compatibility.
 
 >>> char
 char
->>> int8[:, :]
-int8[:, :]
+>>> int8[:, :, :]
+int8[:, :, :]
 >>> int8.signed
 True
 >>> uint8
@@ -225,7 +225,7 @@ class Type(miniutils.ComparableObjectMixin):
             step_idx = None
             for idx, s in enumerate(item):
                 verify_slice(s)
-                if (s.step and step_idx) or idx not in (0, len(item) - 1):
+                if s.step and (step_idx or idx not in (0, len(item) - 1)):
                     raise minierror.InvalidTypeSpecification(
                         "Step may only be provided once, and only in the "
                         "first or last dimension.")
@@ -246,7 +246,7 @@ class Type(miniutils.ComparableObjectMixin):
     def __getattr__(self, attr):
         if attr.startswith('is_'):
             return False
-        raise AttributeError("%s: %s" % (type(self), attr))
+        return getattr(type(self), attr)
 
 class ArrayType(Type):
 
@@ -264,7 +264,8 @@ class ArrayType(Type):
 
     @property
     def comparison_type_list(self):
-        return [self.dtype, self.axes]
+        return [self.dtype, self.axes, self.is_c_contig, self.is_f_contig,
+                self.inner_contig]
 
     def pointer(self):
         raise Exception("You probably want a pointer type to the dtype")
