@@ -1,7 +1,8 @@
 """
-Minimal type system. Don't call this module types, to avoid 'from .' imports
-and ensure 2.4 compatibility.
-
+This module provides a minimal type system, and ways to promote types, as
+well as ways to convert to an LLVM type system. A set of predefined types are
+defined. Types may be sliced to turn them into array types, in the same way
+as the memoryview syntax.
 
 >>> char
 char
@@ -115,6 +116,7 @@ class TypeMapper(object):
         raise NotImplementedError
 
     def from_python(self, value):
+        "Get a type from a python value"
         if isinstance(value, float):
             return double
         elif isinstance(value, (int, long)):
@@ -126,9 +128,11 @@ class TypeMapper(object):
             # raise minierror.UnmappableTypeError(type(value))
 
     def promote_numeric(self, type1, type2):
+        "Promote two numeric types"
         return max([type1, type2], key=lambda type: type.rank)
 
     def promote_arrays(self, type1, type2):
+        "Promote two array types in an expression to a new array type"
         equal_ndim = type1.ndim == type2.ndim
         return ArrayType(self.promote_types(type1.dtype, type2.dtype),
                          ndim=max(type1.ndim, type2.ndim),
@@ -138,6 +142,7 @@ class TypeMapper(object):
                                       type2.is_f_contig))
 
     def promote_types(self, type1, type2):
+        "Promote two arbitrary types"
         if type1.is_pointer and type2.is_int_like:
             return type1
         elif type2.is_pointer and type2.is_int_like:
@@ -153,6 +158,14 @@ class TypeMapper(object):
 
 
 class Type(miniutils.ComparableObjectMixin):
+    """
+    Base class for all types.
+
+    .. attribute:: subtypes
+
+        The list of subtypes to allow comparing and hashing them recursively
+    """
+
     is_array = False
     is_pointer = False
     is_typewrapper = False
@@ -177,18 +190,21 @@ class Type(miniutils.ComparableObjectMixin):
         self.qualifiers = kwds.get('qualifiers', frozenset())
 
     def qualify(self, *qualifiers):
+        "Qualify this type with a qualifier such as ``const`` or ``restrict``"
         qualifiers = list(qualifiers)
         qualifiers.extend(self.qualifiers)
         attribs = dict(vars(self), qualifiers=qualifiers)
         return type(self)(**attribs)
 
     def unqualify(self, *unqualifiers):
+        "Remove the given qualifiers from the type"
         unqualifiers = set(unqualifiers)
         qualifiers = [q for q in self.qualifiers if q not in unqualifiers]
         attribs = dict(vars(self), qualifiers=qualifiers)
         return type(self)(**attribs)
 
     def pointer(self):
+        "Get a pointer to this type"
         return PointerType(self)
 
     @property
@@ -241,6 +257,7 @@ class Type(miniutils.ComparableObjectMixin):
             return ArrayType(self, 1, is_c_contig=item.step)
 
     def to_llvm(self, context):
+        "Get a corresponding llvm type from this type"
         return context.to_llvm(self)
 
     def __getattr__(self, attr):
@@ -351,10 +368,17 @@ class NumericType(NamedType):
     """
     Base class for numeric types.
 
-    Attributes:
-        name: name of the type
-        itemsize: sizeof(type)
-        rank: ordering of numeric types
+    .. attribute:: name
+
+        name of the type
+
+    .. attribute:: itemsize
+
+        sizeof(type)
+
+    .. attribute:: rank
+
+        ordering of numeric types
     """
     is_numeric = True
 

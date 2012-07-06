@@ -1,0 +1,8 @@
+PYTHONPATH+=":`pwd`/.."
+
+all: doc
+
+doc:
+	PYTHONPATH="$(PYTHONPATH)" sphinx-apidoc -o doc -F . -A "Mark Florisson" -V 0.1
+	PYTHONPATH="$(PYTHONPATH)" make -C doc/ html
+	echo "HTML documentation can be read here: doc/_build/html/minivect.html"

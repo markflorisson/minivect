@@ -8,6 +8,10 @@ import minitypes
 import minivisitor
 
 class CodeGen(minivisitor.TreeVisitor):
+    """
+    Base class for code generators written as visitors.
+    """
+
     def __init__(self, context, codewriter):
         super(CodeGen, self).__init__(context)
         self.code = codewriter

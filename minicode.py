@@ -15,15 +15,21 @@ class CodeWriter(object):
     """
     Write code as objects for later assembly.
 
-        loop_levels:
-            CodeWriter objects just before the start of each loop
-        tiled_loop_levels:
-            same as loop levels, but takes into account tiled loop patterns
-        cleanup_levels:
-            CodeWriter objects just after the end of each loop
-        declaration_levels:
-            same as loop_levels, but a valid insertion point for
-            C89 declarations
+    .. attribute:: loop_levels
+
+        CodeWriter objects just before the start of each loop
+
+    .. attribute:: tiled_loop_levels
+
+        same as loop_levels, but takes into account tiled loop patterns
+
+    .. attribute:: cleanup_levels
+
+        CodeWriter objects just after the end of each loop
+
+    .. attribute:: declaration_levels
+
+        same as loop_levels, but a valid insertion point for C89 declarations
     """
 
     error_handler = None
@@ -41,6 +47,11 @@ class CodeWriter(object):
         return cls(context, buffer)
 
     def insertion_point(self):
+        """
+        Create an insertion point for the code writer. Any code written
+        to this insertion point (later on) is inserted in the output code at
+        the point where this method was called.
+        """
         result = self.clone(self, self.context, self.buffer.insertion_point())
         result.loop_levels = list(self.loop_levels)
         result.tiled_loop_levels = list(self.tiled_loop_levels)
@@ -58,6 +69,12 @@ class CodeWriter(object):
         "Jump to a label. Implement in subclasses"
 
 class CCodeWriter(CodeWriter):
+    """
+    Code writer to write C code. Has both a prototype buffer and an
+    implementation buffer. The prototype buffer will contain the C
+    prototypes, and the implementation buffer the actual function
+    code.
+    """
 
     def __init__(self, context, buffer=None, proto_code=None):
         super(CCodeWriter, self).__init__(context, buffer)
@@ -66,17 +83,21 @@ class CCodeWriter(CodeWriter):
         self.indent = 0
 
     def put_label(self, label):
+        "Insert a C label"
         self.putln('%s:' % self.mangle(label.name))
 
     def put_goto(self, label):
+        "Jump to (goto) a label"
         self.putln("goto %s;" % self.mangle(label.name))
 
     def putln(self, s):
+        "Write a code string as a line. Also performs indentation"
         self.indent -= s.count('}')
         self.write("%s%s\n" % (self.indent * '    ', s))
         self.indent += s.count('{')
 
     def mangle(self, s):
+        "Mangle symbol names"
         return "__mini_mangle_%s" % s
 
     @classmethod
@@ -105,14 +126,21 @@ class TempitaCodeWriter(CodeWriter):
         self.write(sub_tempita(string) + '\n')
 
 class CodeFormatter(object):
+    """
+    Default code formatting, which returns the formatted code as a list
+    of objects (the ones written to the :py:class`CodeWriter`)
+    """
     def format(self, codewriter):
         return codewriter.buffer.getvalue()
 
 class CodeStringFormatter(CodeFormatter):
+    "Format code as strings"
     def format(self, codewriter):
         return "".join(codewriter.buffer.getvalue())
 
 class CCodeStringFormatter(CodeStringFormatter):
+    "Format the prototype and code implementation"
+
     def format(self, codewriter):
         return ("".join(codewriter.proto_code.buffer.getvalue()),
                 "".join(codewriter.buffer.getvalue()))

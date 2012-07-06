@@ -14,21 +14,70 @@ import minivisitor
 import minicode
 import codegen
 
+class UndocClassAttribute(object):
+    def __init__(self, cls):
+        self.cls = cls
+
+    def __call__(self, *args, **kwargs):
+        return self.cls(*args, **kwargs)
+
 class Context(object):
     """
     A context that knows how to map ASTs back and forth, how to wrap nodes
     and types, and how to instantiate a code generator for specialization.
 
-    An opaque_node is a node that is not from our AST, and a normal node
-    is one that has a interface compatible with ours.
+    An opaque_node or foreign node is a node that is not from our AST,
+    and a normal node is one that has a interface compatible with ours.
+
+    To provide custom functionality, set the following attributes, or
+    subclass this class.
+
+    :param astbuilder: the :py:class:`ASTBuilder` or ``None``
+    :param typemapper: the :py:class:`minivect.minitypes.Typemapper` or
+                       ``None`` for the default.
+
+    .. attribute:: codegen_cls
+
+        The code generator class that is used to generate code.
+        The default is :py:class:`minivect.codegen.CodeGen`
+
+    .. attribute:: cleanup_codegen_cls
+
+        The code generator that generates code to dispose of any
+        garbage (e.g. intermediate object temporaries).
+        The default is :py:class:`minivect.codegen.CodeGenCleanup`
+
+    .. attribute:: codewriter_cls
+
+        The code writer that the code generator writes its generated code
+        to. This may be strings or arbitrary objects.
+        The default is :py:class:`minivect.minicode.CodeWriter`, which accepts
+        arbitrary objects.
+
+    .. attribute:: codeformatter_cls
+
+        A formatter to format the generated code.
+
+        The default is :py:class:`minivect.minicode.CodeFormatter`,
+        which returns a list of objects written. Set this to
+        :py:class:`minivect.minicode.CodeStringFormatter`
+        to have the strings joined together.
+
+    .. attribute:: specializer_mixin_cls
+
+        A specializer mixin class that can override or intercept
+        functionality. This class should likely participate
+        cooperatively in MI.
+
+    Use subclass :py:class:`CContext` to get the defaults for C code generation.
     """
 
     debug = False
 
-    codegen_cls = codegen.CodeGen
-    cleanup_codegen_cls = codegen.CodeGenCleanup
-    codewriter_cls = minicode.CodeWriter
-    codeformatter_cls = minicode.CodeFormatter
+    codegen_cls = UndocClassAttribute(codegen.CodeGen)
+    cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
+    codewriter_cls = UndocClassAttribute(minicode.CodeWriter)
+    codeformatter_cls = UndocClassAttribute(minicode.CodeFormatter)
 
     specializer_mixin_cls = None
 
@@ -40,7 +89,14 @@ class Context(object):
         return self.run(astmapper.visit(opaque_ast), specializers)
 
     def run(self, ast, specializer_classes):
-        self.astbuilder.tempcounter = 0
+        """
+        Specialize the given AST with all given specializers and return
+        an iterable of generated code in the form of
+        ``(specializer, new_ast, codewriter, code_obj)``
+
+        The code_obj is the generated code (e.g. a string of C code),
+        depending on the code formatter used.
+        """
         for specializer_class in specializer_classes:
             if self.specializer_mixin_cls:
                 cls1, cls2 = self.specializer_mixin_cls, specializer_class
@@ -57,6 +113,7 @@ class Context(object):
                    self.codeformatter_cls().format(codewriter))
 
     def generate_disposal_code(self, code, node):
+        "Run the disposal code generator on an (sub)AST"
         transform = self.cleanup_codegen_cls(self, code)
         transform.visit(node)
 
@@ -65,6 +122,7 @@ class Context(object):
     #
 
     def promote_types(self, type1, type2):
+        "Promote types in an arithmetic operation"
         return self.typemapper.promote_types(type1, type2)
 
     def getchildren(self, node):
@@ -89,10 +147,12 @@ class Context(object):
         raise NotImplementedError
 
     def to_llvm(self, type):
+        "Return an LLVM type for the given minitype"
         return self.typemapper.to_llvm(type)
 
 
 class CContext(Context):
+    "Set defaults for C code generation."
 
     codegen_cls = codegen.CCodeGen
     codewriter_cls = minicode.CCodeWriter
@@ -100,20 +160,24 @@ class CContext(Context):
 
 class ASTBuilder(object):
     """
-    This class is used to build up ASTs. It can be used by a user from
-    a transform or otherwise, but the important bit is that we use it
-    in our code to build up an AST that can be overridden by the user.
+    This class is used to build up a minivect AST. It can be used by a user
+    from a transform or otherwise, but the important bit is that we use it
+    in our code to build up an AST that can be overridden by the user,
+    and which makes it convenient to build up complex ASTs concisely.
     """
 
     # the 'pos' attribute is set for each visit to each node by
     # the ASTMapper
     pos = None
-    tempcounter = 0
 
     def __init__(self, context):
+        """
+        :param context: the :py:class:`Context`
+        """
         self.context = context
 
-    def infer_type(self, value):
+    def _infer_type(self, value):
+        "Used to infer types for self.constant()"
         if isinstance(value, (int, long)):
             return minitypes.IntType()
         elif isinstance(value, float):
@@ -125,9 +189,21 @@ class ASTBuilder(object):
 
     def function(self, name, body, args, shapevar=None, posinfo=None):
         """
-        arguments: [FunctionArgument]
-        shapevar: the shape Variable. Will be prepended as
-                  an argument to `arguments`
+        Create a new function.
+
+        :type name: str
+        :param name: name of the function
+
+        :type args: [:py:class:`FunctionArgument`]
+        :param args: all array and scalar arguments to the function, excluding
+                     shape or position information.
+
+        :param shapevar: the :py:class:`Variable` for the total broadcast shape
+                         If ``None``, a default of ``Py_ssize_t *`` is assumed.
+
+        :type posinfo: :py:class:`FunctionArgument`
+        :param posinfo: if given, this will be the second, third and fourth
+                        arguments to the function ``(filename, lineno, column)``.
         """
         if shapevar is None:
             shapevar = self.variable(minitypes.Py_ssize_t.pointer(),
@@ -150,11 +226,16 @@ class ASTBuilder(object):
                             success_value=self.constant(0))
 
     def funcarg(self, variable, *variables):
+        """
+        Create a (compound) function argument consisting of one or multiple
+        argument Variables.
+        """
         if not variables:
             variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))
 
     def array_funcarg(self, variable):
+        "Create an array function argument"
         return ArrayFunctionArgument(
                 self.pos, variable.type, name=variable.name,
                 variable=variable,
@@ -163,38 +244,59 @@ class ASTBuilder(object):
                 strides_pointer=self.stridesvar(variable))
 
     def incref(self, var, funcname='Py_INCREF'):
+        "Generate a Py_INCREF() statement"
         functype = minitypes.FunctionType(return_type=minitypes.void,
                                           args=[minitypes.object_])
         py_incref = self.variable(functype, funcname)
         return self.expr_stat(self.funccall(py_incref, [var]))
 
     def decref(self, var):
+        "Generate a Py_DECCREF() statement"
         return self.incref(var, funcname='Py_DECREF')
 
     def print_(self, *args):
         "Print out all arguments to stdout"
         return PrintNode(self.pos, args=list(args))
 
-    def funccall(self, name_or_pointer, args):
-        type = name_or_pointer.type
+    def funccall(self, func_or_pointer, args):
+        """
+        Generate a call to the given function (a :py:class:`Variable`) of
+        :py:class:`minivect.minitypes.FunctionType` or a
+        pointer to a function type and the given arguments.
+        """
+        type = func_or_pointer.type
         if type.is_pointer:
-            type = name_or_pointer.type.base_type
+            type = func_or_pointer.type.base_type
         return FuncCallNode(self.pos, type=type,
-                            name_or_pointer=name_or_pointer, args=args)
-
-    def funcname(self, type, name):
-        return FuncNameNode(self.pos, type=type, name=name)
-
-    def funcref(self, function):
-        return FuncRefNode(self.pos, type=function.type, function=function)
+                            func_or_pointer=func_or_pointer, args=args)
 
     def nditerate(self, body):
+        """
+        This node wraps the given AST expression in an :py:class:`NDIterate`
+        node, which will be expanded by the specializers to one or several
+        loops.
+        """
         return NDIterate(self.pos, body)
 
     def for_(self, body, init, condition, step, is_tiled=False):
+        """
+        Create a for loop node.
+
+        :param body: loop body
+        :param init: assignment expression
+        :param condition: boolean loop condition
+        :param step: step clause (assignment expression)
+        """
         return ForNode(self.pos, init, condition, step, body, is_tiled)
 
     def for_range_upwards(self, body, upper, lower=None, step=None):
+        """
+        Create a single upwards for loop, typically used from a specializer to
+        replace an :py:class:`NDIterate` node.
+
+        :param body: the loop body
+        :param upper: expression specifying an upper bound
+        """
         if lower is None:
             lower = self.constant(0)
         if step is None:
@@ -210,10 +312,21 @@ class ASTBuilder(object):
         return result
 
     def omp_for(self, for_node, if_clause):
+        """
+        Annotate the for loop with an OpenMP parallel for clause.
+
+        :param if_clause: the expression node that determines whether the
+                          parallel section is executed or whether it is
+                          executed sequentially (to avoid synchronization
+                          overhead)
+        """
         return OpenMPLoopNode(self.pos, for_node=for_node,
                               if_clause=if_clause)
 
     def stats(self, *statements):
+        """
+        Wrap a bunch of statements in an AST node.
+        """
         stats = []
         for stat in statements:
             if stat.is_statlist:
@@ -233,16 +346,28 @@ class ASTBuilder(object):
                                      stat=self.stats(*stats), expr=expr)
 
     def if_(self, cond, body):
+        "If statement"
         return IfNode(self.pos, cond=cond, body=body)
 
     def if_else_expr(self, cond, lhs, rhs):
+        "If/else expression, resulting in lhs if cond else rhs"
         type = self.context.promote_types(lhs.type, rhs.type)
         return IfElseExprNode(self.pos, type=type, cond=cond, lhs=lhs, rhs=rhs)
 
     def binop(self, type, op, lhs, rhs):
+        """
+        Binary operation on two nodes.
+
+        :param type: the result type of the expression
+        :param op: binary operator
+        :type op: str
+        """
         return BinopNode(self.pos, type, op, lhs, rhs)
 
     def add(self, lhs, rhs, result_type=None):
+        """
+        Shorthand for the + binop. Filters out adding 0 constants.
+        """
         if lhs.is_constant and lhs.value == 0:
             return rhs
         elif rhs.is_constant and rhs.value == 0:
@@ -252,27 +377,48 @@ class ASTBuilder(object):
             result_type = self.context.promote_types(lhs.type, rhs.type)
         return self.binop(result_type, '+', lhs, rhs)
 
-    def mul(self, lhs, rhs):
+    def mul(self, lhs, rhs, result_type=None):
+        """
+        Shorthand for the * binop. Filters out multiplication with 1 constants.
+        """
         if lhs.is_constant and lhs.value == 1:
             return rhs
         elif rhs.is_constant and rhs.value == 1:
             return lhs
 
-        type = self.context.promote_types(lhs.type, rhs.type)
-        return self.binop(type, '*', lhs, rhs)
+        if result_type is None:
+            result_type = self.context.promote_types(lhs.type, rhs.type)
+        return self.binop(result_type, '*', lhs, rhs)
 
     def min(self, lhs, rhs):
+        """
+        Returns min(lhs, rhs) expression.
+
+        .. NOTE:: Make lhs and rhs temporaries if they should only be
+                  evaluated once.
+        """
         type = self.context.promote_types(lhs.type, rhs.type)
         cmp_node = self.binop(type, '<', lhs, rhs)
         return self.if_else_expr(cmp_node, lhs, rhs)
 
     def index(self, pointer, index, dest_pointer_type=None):
+        """
+        Index a pointer with the given index node.
+
+        :param dest_pointer_type: if given, cast the result (*after* adding
+                                  the index) to the destination type and
+                                  dereference.
+        """
         if dest_pointer_type:
             return self.index_multiple(pointer, [index], dest_pointer_type)
         return SingleIndexNode(self.pos, pointer.type.base_type,
                                pointer, index)
 
     def index_multiple(self, pointer, indices, dest_pointer_type=None):
+        """
+        Same as :py:meth:`index`, but accepts multiple indices. This is
+        useful e.g. after multiplication of the indices with the strides.
+        """
         for index in indices:
             pointer = self.add(pointer, index)
 
@@ -282,21 +428,26 @@ class ASTBuilder(object):
         return self.dereference(pointer)
 
     def assign_expr(self, node, value):
+        "Create an assignment expression assigning ``value`` to ``node``"
         assert node is not None
         if not isinstance(value, Node):
             value = self.constant(value)
         return AssignmentExpr(self.pos, node.type, node, value)
 
     def assign(self, node, value):
+        "Assignment statement"
         return self.expr_stat(self.assign_expr(node, value))
 
     def dereference(self, pointer):
+        "Dereference a pointer"
         return DereferenceNode(self.pos, pointer.type.base_type, pointer)
 
     def unop(self, type, operator, operand):
+        "Unary operation. ``type`` indicates the result type of the expression."
         return UnopNode(self.pos, type, operator, operand)
 
     def coerce_to_temp(self, expr):
+        "Coerce the given expression to a temporary"
         type = expr.type
         if type.is_array:
             type = type.dtype
@@ -304,69 +455,113 @@ class ASTBuilder(object):
         return self.expr(stats=[self.assign(temp, expr)], expr=temp)
 
     def temp(self, type, name=None):
+        "Allocate a temporary of a given type"
         return TempNode(self.pos, type, name=name or 'temp')
 
     def constant(self, value, type=None):
+        """
+        Create a constant from a Python value. If type is not given, it is
+        inferred (or it will raise a
+        :py:class:`minivect.minierror.InferTypeError`).
+        """
         if type is None:
-            type = self.infer_type(value)
+            type = self._infer_type(value)
         return ConstantNode(self.pos, type, value)
 
     def variable(self, type, name):
+        """
+        Create a variable with a name and type. Variables
+        may refer to function arguments, functions, etc.
+        """
         return Variable(self.pos, type, name)
 
     def cast(self, node, dest_type):
+        "Cast node to the given destination type"
         return CastNode(self.pos, dest_type, node)
 
     def return_(self, result):
+        "Return a result"
         return ReturnNode(self.pos, result)
 
     def data_pointer(self, variable):
+        "Return the data pointer of an array variable"
         assert variable.type.is_array
         return DataPointer(self.pos, variable.type.dtype.pointer(),
                            variable)
 
     def shape_index(self, index, function):
+        "Index the shape of the array operands with integer `index`"
         return self.index(function.shape, self.constant(index))
 
     def extent(self, variable, index, function):
-        "Index the shape of a specific variable"
+        "Index the shape of a specific variable with integer `index`"
         assert variable.type.is_array
         offset = function.ndim - variable.type.ndim
         return self.index(function.shape, self.constant(index + offset))
 
     def stridesvar(self, variable):
+        "Return the strides variable for the given array operand"
         return StridePointer(self.pos, minitypes.Py_ssize_t.pointer(), variable)
 
     def stride(self, variable, index):
+        "Return the stride of array operand `variable` at integer `index`"
         return self.index(self.stridesvar(variable), self.constant(index))
 
     def jump(self, label):
+        "Jump to a label"
         return JumpNode(self.pos, label)
 
     def jump_target(self, label):
+        """
+        Return a target that can be jumped to given a label. The label is
+        shared between the jumpers and the target.
+        """
         return JumpTargetNode(self.pos, label)
 
     def label(self, name):
+        "Return a label with a name"
         return LabelNode(self.pos, name)
 
     def raise_exc(self, posinfo, exc_var, msg_val, fmt_args):
+        """
+        Raise an exception given the positional information (see the `posinfo`
+        method), the exception type (PyExc_*), a formatted message string and
+        a list of values to be used for the format string.
+        """
         return RaiseNode(self.pos, posinfo, exc_var, msg_val, fmt_args)
 
     def posinfo(self, posvars):
+        """
+        Return position information given a list of position variables
+        (filename, lineno, column). This can be used for raising exceptions.
+        """
         return PositionInfoNode(self.pos, posinfo=posvars)
 
     def error_handler(self, node):
+        """
+        Wrap the given node, which may raise exceptions, in an error handler.
+        An error handler allows the code to clean up before propagating the
+        error, and finally returning an error indicator from the function.
+        """
         return ErrorHandler(self.pos, body=node,
                             error_label=self.label('error'),
                             cleanup_label=self.label('cleanup'))
 
     def wrap(self, opaque_node, specialize_node_callback, **kwds):
+        """
+        Wrap a node and type and return a NodeWrapper node. This node
+        will have to be handled by the caller in a code generator. The
+        specialize_node_callback is called when the NodeWrapper is
+        specialized by a Specializer.
+        """
         type = minitypes.TypeWrapper(self.context.gettype(opaque_node),
                                      self.context)
         return NodeWrapper(self.context.getpos(opaque_node), type,
                            opaque_node, specialize_node_callback, **kwds)
 
 class Position(object):
+    "Each node has a position which is an instance of this type."
+
     def __init__(self, filename, line, col):
         self.filename = filename
         self.line = line
@@ -376,6 +571,9 @@ class Position(object):
         return "%s:%d:%d" % (self.filename, self.line, self.col)
 
 class Node(miniutils.ComparableObjectMixin):
+    """
+    Base class for AST nodes.
+    """
 
     is_expression = False
 
@@ -436,6 +634,8 @@ class Node(miniutils.ComparableObjectMixin):
         return h
 
 class ExprNode(Node):
+    "Base class for expressions. Each node has a type."
+
     is_expression = True
 
     def __init__(self, pos, type, **kwds):
@@ -443,7 +643,28 @@ class ExprNode(Node):
         self.type = type
 
 class FunctionNode(Node):
+    """
+    Function node. error_value and success_value are returned in case of
+    exceptions and success respectively.
+
+    .. attribute:: shape
+            the broadcast shape for all operands
+
+    .. attribute:: ndim
+            the ndim of the total broadcast' shape
+
+    .. attribute:: arguments
+            all array arguments
+
+    .. attribute:: scalar arguments
+        all non-array arguments
+
+    .. attribute:: posinfo
+        the position variables we can write to in case of an exception
+    """
+
     child_attrs = ['body', 'arguments', 'scalar_arguments']
+
     def __init__(self, pos, name, body, arguments, scalar_arguments,
                  shape, posinfo, error_value, success_value):
         super(FunctionNode, self).__init__(pos)
@@ -465,20 +686,14 @@ class FuncCallNode(Node):
     """
     Call a function given a pointer or its name (FuncNameNode)
     """
+
     child_attrs = ['name_or_pointer', 'args']
 
-class FuncNameNode(Node):
-    """
-    Load a function given its C linkage name.
-    """
-
-class FuncRefNode(Node):
-    """
-    Refer to a function given a FunctionNode.
-    """
-
 class ReturnNode(Node):
+    "Return an operand"
+
     child_attrs = ['operand']
+
     def __init__(self, pos, operand):
         super(ReturnNode, self).__init__(pos)
         self.operand = operand
@@ -504,8 +719,13 @@ class FunctionArgument(ExprNode):
     Argument to the FunctionNode. Array arguments contain multiple
     actual arguments, e.g. the data and stride pointer.
 
-        variable: some argument to the function (array or otherwise)
-        variables: the actual variables this operand should be unpacked into
+    .. attribute:: variable
+
+        some argument to the function (array or otherwise)
+
+    .. attribute:: variables
+
+        the actual variables this operand should be unpacked into
     """
     child_attrs = ['variables']
     if_funcarg = True
@@ -518,13 +738,20 @@ class FunctionArgument(ExprNode):
         self.args = dict((v.name, v) for v in variables)
 
 class ArrayFunctionArgument(ExprNode):
+    "Array operand to the function"
+
     child_attrs = ['data_pointer', 'strides_pointer']
     is_array_funcarg = True
 
 class PrintNode(Node):
+    "Print node for some arguments"
+
     child_attrs = ['args']
 
 class NDIterate(Node):
+    """
+    Iterate in N dimensions. See :py:class:`ASTBuilder.nditerate`
+    """
 
     child_attrs = ['body']
 
@@ -533,14 +760,13 @@ class NDIterate(Node):
         self.body = body
 
 class ForNode(Node):
+    """
+    A for loop, see :py:class:`ASTBuilder.for_`
+    """
 
     child_attrs = ['init', 'condition', 'step', 'body']
 
     def __init__(self, pos, init, condition, step, body, is_tiled=False):
-        """
-        init, condition and step are the 3 arguments to the supposed
-        C for loop
-        """
         super(ForNode, self).__init__(pos)
         self.init = init
         self.condition = condition
@@ -549,9 +775,14 @@ class ForNode(Node):
         self.is_tiled = False
 
 class IfNode(Node):
+    "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_"
+
     child_attrs = ['cond', 'body']
 
 class StatListNode(Node):
+    """
+    A node to wrap multiple statements, see :py:class:`ASTBuilder.stats
+    """
     child_attrs = ['stats']
     is_statlist = True
 
@@ -560,6 +791,7 @@ class StatListNode(Node):
         self.stats = statements
 
 class ExprStatNode(Node):
+    "Turn an expression into a statement, see :py:class:`ASTBuilder.expr_stat`"
     child_attrs = ['expr']
 
 class ExprNodeWithStatement(Node):
@@ -567,7 +799,8 @@ class ExprNodeWithStatement(Node):
 
 class NodeWrapper(ExprNode):
     """
-    Adapt an opaque node to provide a consistent interface.
+    Adapt an opaque node to provide a consistent interface. This has to be
+    handled by the user's specializer. See :py:class:`ASTBuilder.wrap`
     """
 
     is_node_wrapper = True
@@ -600,12 +833,14 @@ class NodeWrapper(ExprNode):
         return type(self)(opaque_node=opaque_node, **kwds)
 
 class BinaryOperationNode(ExprNode):
+    "Base class for binary operations"
     child_attrs = ['lhs', 'rhs']
     def __init__(self, pos, type, lhs, rhs):
         super(BinaryOperationNode, self).__init__(pos, type)
         self.lhs, self.rhs = lhs, rhs
 
 class BinopNode(BinaryOperationNode):
+    "Node for binary operations"
 
     is_binop = True
 
@@ -613,16 +848,12 @@ class BinopNode(BinaryOperationNode):
         super(BinopNode, self).__init__(pos, type, lhs, rhs)
         self.operator = operator
 
-    def is_cf_contig(self):
-        c1, f1 = self.op1.is_cf_contig()
-        c2, f2 = self.op2.is_cf_contig()
-        return c1 and c2, f1 and f2
-
     @property
     def comparison_objects(self):
         return (self.operator, self.lhs, self.rhs)
 
 class SingleOperandNode(ExprNode):
+    "Base class for operations with one operand"
     child_attrs = ['operand']
     def __init__(self, pos, type, operand):
         super(SingleOperandNode, self).__init__(pos, type)
@@ -662,8 +893,11 @@ class ConstantNode(ExprNode):
         self.value = value
 
 class Variable(ExprNode):
-    is_variable = True
+    """
+    Represents use of a function argument in the function.
+    """
 
+    is_variable = True
     mangled_name = None
 
     def __init__(self, pos, type, name):
@@ -677,6 +911,7 @@ class Variable(ExprNode):
         return hash(self.name)
 
 class ArrayAttribute(Variable):
+    "Denotes an attribute of array operands, e.g. the data or stride pointers"
     def __init__(self, pos, type, arrayvar):
         super(ArrayAttribute, self).__init__(pos, type,
                                              arrayvar.name + self._name)
@@ -690,11 +925,13 @@ class StridePointer(ArrayAttribute):
     "Reference to the stride pointer of an array variable operand"
     _name = '_strides'
 
-class ShapePointer(ArrayAttribute):
-    "Reference to the shape pointer of an array operand"
-    _name = '_shape'
+#class ShapePointer(ArrayAttribute):
+#    "Reference to the shape pointer of an array operand."
+#    _name = '_shape'
 
 class TempNode(Variable):
+    "A temporary of a certain type"
+
     is_temp = True
 
     def __eq__(self, other):
@@ -717,10 +954,17 @@ class ErrorHandler(Node):
     error handler. At the outermost (function) level, the error handler simply
     returns an error indication.
 
-        error_label: point to jump to in case of an error
-        cleanup_label: point to jump to in the normal case
+    .. attribute:: error_label
+
+        point to jump to in case of an error
+
+    .. attribute:: cleanup_label
+
+        point to jump to in the normal case
 
     It generates the following:
+
+    .. code-block:: c
 
         error_var = 0;
         ...
@@ -744,6 +988,7 @@ class ErrorHandler(Node):
     cascade = None
 
 class JumpNode(Node):
+    "A jump to a jump target"
     child_attrs = ['label']
     def __init__(self, pos, label):
         Node.__init__(self, pos)

@@ -1,5 +1,12 @@
 """
 Specializers for various sorts of data layouts and memory alignments.
+
+These specializers operate on a copy of the simplified vector expression
+representation (i.e., one with an NDIterate node). This node is replaced
+with one or several ForNode nodes in a specialized order.
+
+For auto-tuning code for tile size and OpenMP size, see
+https://github.com/markflorisson88/cython/blob/_array_expressions/Cython/Utility/Vector.pyx
 """
 
 import copy
@@ -9,6 +16,12 @@ import miniutils
 import minitypes
 
 class ASTMapper(minivisitor.VisitorTransform):
+    """
+    Base class to map foreign ASTs onto a minivect AST, or vice-versa.
+    This sets the current node's position in the astbuilder for each
+    node that is being visited, to make it easy to build new AST nodes
+    without passing in source position information everywhere.
+    """
 
     def __init__(self, context):
         super(ASTMapper, self).__init__(context)
@@ -18,6 +31,7 @@ class ASTMapper(minivisitor.VisitorTransform):
         return self.context.getpos(opaque_node)
 
     def map_type(self, opaque_node, **kwds):
+        "Return a mapped type for the foreign node."
         return self.context.typemapper.map_type(
                         self.context.gettype(opaque_node), **kwds)
 
@@ -30,8 +44,12 @@ class ASTMapper(minivisitor.VisitorTransform):
 
 class Specializer(ASTMapper):
     """
-    Implement visit_* methods to specialize to some pattern. The default is
-    to copy the node and specialize the children.
+    Base class for all specializers. Implement visit_* methods to specialize
+    nodes to some pattern.
+
+    Implements implementations to handle errors and cleanups, adds a return
+    statement to the function and can insert debug print statements if
+    context.debug is set to a true value.
     """
 
     is_contig_specializer = False
@@ -60,10 +78,15 @@ class Specializer(ASTMapper):
         return node
 
     def _index_list(self, pointer, ndim):
+        "Return a list of indexed pointers"
         return [self.astbuilder.index(pointer, self.astbuilder.constant(i))
                     for i in range(ndim)]
 
     def _debug_function_call(self, b, node):
+        """
+        Generate debug print statements when the specialized function is
+        called.
+        """
         stats = [
             b.print_(b.constant("Calling function %s (%s specializer)" % (
                                        node.name, self.specialization_name))),
@@ -85,6 +108,12 @@ class Specializer(ASTMapper):
         node.body = b.stats(b.stats(*stats), node.body)
 
     def visit_FunctionNode(self, node):
+        """
+        Handle a FunctionNode. Sets node.total_shape to the product of the
+        shape, wraps the function's body in a
+        :py:class:`minivect.miniast.ErrorHandler` if needed and adds a
+        return statement.
+        """
         b = self.astbuilder
         self.compute_total_shape(node)
 
@@ -116,6 +145,10 @@ class Specializer(ASTMapper):
         return self.visit_Node(node)
 
     def visit_PositionInfoNode(self, node):
+        """
+        Replace with the setting of positional source information in case
+        of an error.
+        """
         b = self.astbuidler
 
         posinfo = self.function.posinfo
@@ -127,6 +160,9 @@ class Specializer(ASTMapper):
                 b.assign(b.deref(posinfo.column), b.constant(pos.column)))
 
     def visit_RaiseNode(self, node):
+        """
+        Generate a call to PyErr_Format() to set an exception.
+        """
         from minitypes import FunctionType, object_
         b = self.astbuilder
 
@@ -137,6 +173,9 @@ class Specializer(ASTMapper):
                        [node.exc_var, node.msg_val] + node.fmt_args))
 
     def visit_ErrorHandler(self, node):
+        """
+        See miniast.ErrorHandler for an explanation of what this needs to do.
+        """
         b = self.astbuilder
 
         node.error_variable = b.temp(minitypes.bool_)
@@ -159,6 +198,12 @@ class Specializer(ASTMapper):
         return node
 
     def omp_for(self, node):
+        """
+        Insert an OpenMP for loop with an 'if' clause that checks to see
+        whether the total data size exceeds the given OpenMP auto-tuned size.
+        The caller needs to adjust the size, set in the FunctionNode's
+        'omp_size' attribute, depending on the number of computations.
+        """
         if_clause = self.astbuilder.binop(minitypes.bool_, '>',
                                           self.function.total_shape,
                                           self.function.omp_size)
@@ -184,6 +229,10 @@ class OrderedSpecializer(Specializer):
         return node.total_shape
 
     def loop_order(self, order, ndim=None):
+        """
+        Returns arguments to (x)range() to process something in C or Fortran
+        order.
+        """
         if ndim is None:
             ndim = self.function.ndim
 
@@ -212,7 +261,7 @@ class OrderedSpecializer(Specializer):
     def ordered_loop(self, node, result_indices, lower=None, upper=None,
                      step=None, loop_order=None):
         """
-        Return a loop ordered in C or Fortran order.
+        Return a ForNode ordered in C or Fortran order.
         """
         b = self.astbuilder
 
@@ -235,12 +284,19 @@ class OrderedSpecializer(Specializer):
         return node
 
     def visit_Variable(self, node):
+        """
+        Process variables. For arrays, this means retrieving the element
+        from the array through a call to self._element_location().
+        """
         if node.name in self.function.args and node.type.is_array:
             return self._element_location(node)
 
         return super(OrderedSpecializer, self).visit_Variable(node)
 
     def _index_pointer(self, pointer, indices, strides):
+        """
+        Return an element for an N-dimensional index into a strided array.
+        """
         b = self.astbuilder
         return b.index_multiple(
             b.cast(pointer, minitypes.char.pointer()),
@@ -249,6 +305,10 @@ class OrderedSpecializer(Specializer):
 
     def _strided_element_location(self, node, indices=None, strides_index_offset=0,
                                   ndim=None):
+        """
+        Like _index_pointer, but given only an array operand indices. It first
+        needs to get the data pointer and stride nodes.
+        """
         indices = indices or self.indices
         b = self.astbuilder
         if ndim is None:
@@ -262,6 +322,10 @@ class OrderedSpecializer(Specializer):
         return node
 
 class StridedCInnerContigSpecializer(OrderedSpecializer):
+    """
+    Specialize on the first or last dimension being contiguous (depending
+    on the 'order' attribute).
+    """
 
     specialization_name = "inner_contig_c"
     order = "C"
@@ -298,6 +362,10 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         self.pointers[arg.variable] = pointer
 
     def visit_NDIterate(self, node):
+        """
+        Replace this node with ordered loops and a direct index into a
+        temporary data pointer in the contiguous dimension.
+        """
         b = self.astbuilder
         # start by generating a C or Fortran ordered loop
         node = self.ordered_loop(node.body, self.indices)
@@ -317,9 +385,11 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         return self.visit(self.omp_for(node))
 
     def strided_indices(self):
+        "Return the list of strided indices for this order"
         return self.indices[:-1]
 
     def contig_index(self):
+        "The contiguous index"
         return self.indices[-1]
 
     def _element_location(self, variable):
@@ -327,6 +397,9 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         return self.astbuilder.index(data_pointer, self.contig_index())
 
 class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
+    """
+    Specialize on the first dimension being contiguous.
+    """
 
     order = "F"
     specialization_name = "inner_contig_fortran"
@@ -338,11 +411,21 @@ class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
         return self.indices[0]
 
 class StridedSpecializer(StridedCInnerContigSpecializer):
+    """
+    Specialize on strided operands. If some operands are contiguous in the
+    dimension compatible with the order we are specializing for (the first
+    if Fortran, the last if C), then perform a direct index into a temporary
+    date pointer.
+    """
 
     specialization_name = "strided"
     order = "C"
 
     def matching_contiguity(self, type):
+        """
+        Check whether the array operand for the given type can be directly
+        indexed.
+        """
         return ((type.is_c_contig and self.order == "C") or
                 (type.is_f_contig and self.order == "F"))
 
@@ -351,6 +434,9 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         super(StridedSpecializer, self)._compute_inner_dim_pointer(arg, stats)
 
     def _element_location(self, variable):
+        """
+        Generate a strided or directly indexed load of a single element.
+        """
         #if variable in self.pointers:
         if self.matching_contiguity(variable.type):
             return super(StridedSpecializer, self)._element_location(variable)
@@ -369,15 +455,25 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
 
 class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
                                 StridedSpecializer):
+    """
+    Specialize on Fortran order for strided operands.
+    """
+
     specialization_name = "strided_fortran"
     order = "F"
 
 class ContigSpecializer(OrderedSpecializer):
+    """
+    Specialize on all specializations being contiguous (all F or all C).
+    """
 
     specialization_name = "contig"
     is_contig_specializer = True
 
     def visit_NDIterate(self, node):
+        """
+        Generate a single ForNode over the total data size.
+        """
         b = self.astbuilder
         node = self.omp_for(b.for_range_upwards(
                     node.body, upper=self.function.total_shape))
@@ -388,16 +484,25 @@ class ContigSpecializer(OrderedSpecializer):
         return None
 
     def _element_location(self, node):
+        "Directly index the data pointer"
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
 
 class CTiledStridedSpecializer(OrderedSpecializer):
-
+    """
+    Generate tiled code for the last two (C) or first two (F) dimensions.
+    The blocksize may be overridden through the get_blocksize method, in
+    a specializer subclass or mixin (see miniast.Context.specializer_mixin_cls).
+    """
     specialization_name = "tiled_c"
     order = "C"
     is_tiled_specializer = True
 
     def get_blocksize(self):
+        """
+        Get the tile size. Override in subclasses to provide e.g. parametric
+        tiling.
+        """
         return self.astbuilder.constant(128)
 
     def tiled_order(self):
@@ -506,6 +611,7 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         return self._strided_element_location(variable)
 
 class FTiledStridedSpecializer(CTiledStridedSpecializer):
+    "Tile in Fortran order"
 
     specialization_name = "tiled_fortran"
     order = "F"
