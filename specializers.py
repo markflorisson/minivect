@@ -526,13 +526,15 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         self.indices = []
         self.blocksize = self.get_blocksize()
 
+        # Generate the two outer tiling loops
         tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
         body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
                                  step=self.blocksize,
                                  loop_order=self.tiled_order())
-        body = self.omp_for(body)
         del tiled_loop_body.stats[:]
 
+        # Generate some temporaries to store the upper limit of the inner
+        # tiled loops
         upper_limits = {}
         stats = []
         tiled_order = range(*self.tiled_order())
@@ -554,6 +556,7 @@ class CTiledStridedSpecializer(OrderedSpecializer):
                 return upper_limits[i]
             return b.shape_index(i, self.function)
 
+        # Generate the inner tiled loops
         outer_for_node = node.body
         inner_body = node.body
         tiled_loop_body.stats.append(self.ordered_loop(
@@ -561,10 +564,13 @@ class CTiledStridedSpecializer(OrderedSpecializer):
                 lower=lower, upper=upper,
                 loop_order=self.tiled_order()))
 
+        # Generate the outer loops (in case the array operands have more than
+        # two dimensions)
         indices = []
         body = self.ordered_loop(body, indices,
                                  loop_order=self.untiled_order())
 
+        body = self.omp_for(body)
         # At this point, 'self.indices' are the indices of the tiled loop
         # (the indices in the first two dimensions for Fortran,
         #  the indices in the last two # dimensions for C)
