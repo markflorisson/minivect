@@ -381,7 +381,8 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
             if arg.is_array_funcarg:
                 self._compute_inner_dim_pointer(arg, stats)
 
-        loop.body = b.stats(*(stats + [loop.body]))
+        inner_loop = b.pragma_for(loop.body)
+        loop.body = b.stats(*(stats + [inner_loop]))
         return self.visit(self.omp_for(node))
 
     def strided_indices(self):
@@ -475,9 +476,10 @@ class ContigSpecializer(OrderedSpecializer):
         Generate a single ForNode over the total data size.
         """
         b = self.astbuilder
-        node = self.omp_for(b.for_range_upwards(
-                    node.body, upper=self.function.total_shape))
-        self.target = node.for_node.target
+        for_node = b.for_range_upwards(node.body,
+                                       upper=self.function.total_shape)
+        node = self.omp_for(b.pragma_for(for_node))
+        self.target = for_node.target
         return self.visit(node)
 
     def visit_StridePointer(self, node):
@@ -559,10 +561,12 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         # Generate the inner tiled loops
         outer_for_node = node.body
         inner_body = node.body
-        tiled_loop_body.stats.append(self.ordered_loop(
-                node.body, self.indices,
-                lower=lower, upper=upper,
-                loop_order=self.tiled_order()))
+        tiled_loop_body.stats.append(
+            b.pragma_for(
+                self.ordered_loop(
+                    node.body, self.indices,
+                    lower=lower, upper=upper,
+                    loop_order=self.tiled_order())))
 
         # Generate the outer loops (in case the array operands have more than
         # two dimensions)

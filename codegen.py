@@ -143,8 +143,27 @@ class CCodeGen(CodeGen):
 
     def visit_OpenMPLoopNode(self, node):
         self.code.putln("#ifdef _OPENMP")
-        self.code.putln("#pragma omp parallel for if(%s)" % self.visit(node.if_clause))
+        self.code.putln("#pragma omp parallel for if(%s)" %
+                                            self.visit(node.if_clause))
         self.code.putln("#endif")
+        self.visit(node.for_node)
+
+    def put_intel_pragmas(self, code):
+        """
+        Insert Intel compiler specific pragmas. See "A Guide to Vectorization
+        with Intel(R) C++ Compilers".
+        """
+        code.putln("#ifdef __INTEL_COMPILER")
+        # force auto-vectorization
+        code.putln("#pragma simd")
+        # ignore potential data dependencies
+        # code.putln("#pragma ivdep")
+        # vectorize even if the compiler doesn't think this will be beneficial
+        # code.putln("#pragma vector always")
+        code.putln("#endif")
+
+    def visit_PragmaForLoopNode(self, node):
+        self.put_intel_pragmas(self.code)
         self.visit(node.for_node)
 
     def visit_ForNode(self, node):

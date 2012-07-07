@@ -323,6 +323,12 @@ class ASTBuilder(object):
         return OpenMPLoopNode(self.pos, for_node=for_node,
                               if_clause=if_clause)
 
+    def pragma_for(self, for_node):
+        """
+        Annotate the for loop with pragmas.
+        """
+        return PragmaForLoopNode(self.pos, for_node=for_node)
+
     def stats(self, *statements):
         """
         Wrap a bunch of statements in an AST node.
@@ -945,6 +951,12 @@ class OpenMPLoopNode(Node):
     Execute a loop in parallel.
     """
     child_attrs = ['for_node', 'if_clause']
+
+class PragmaForLoopNode(Node):
+    """
+    Generate compiler-specific pragmas to aid things like SIMDization.
+    """
+    child_attrs = ['for_node']
 
 class ErrorHandler(Node):
     """
