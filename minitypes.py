@@ -462,8 +462,9 @@ class FunctionType(Type):
     is_vararg = False
 
     def to_llvm(self, context):
-        return lc.Type.function(self.return_type.to_llvm(),
-                                [arg_type.to_llvm() for arg_type in self.args],
+        return lc.Type.function(self.return_type.to_llvm(context),
+                                [arg_type.to_llvm(context)
+                                    for arg_type in self.args],
                                 self.is_vararg)
 
 #
