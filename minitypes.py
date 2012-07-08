@@ -327,7 +327,7 @@ class CArrayType(Type):
         return "%s[%d]" % (self.base_type, self.length)
 
     def to_llvm(self, context):
-        return lc.Type.array(self.base_type.to_llvm(), self.size)
+        return lc.Type.array(self.base_type.to_llvm(context), self.size)
 
 class TypeWrapper(Type):
     is_typewrapper = True
@@ -362,7 +362,7 @@ class BoolType(NamedType):
         return "int %s" % " ".join(self.qualifiers)
 
     def to_llvm(self, context):
-        return int8.to_llvm()
+        return int8.to_llvm(context)
 
 class NumericType(NamedType):
     """
@@ -441,7 +441,7 @@ class CStringType(Type):
         return "const char *"
 
     def to_llvm(self, context):
-        return char.pointer().to_llvm()
+        return char.pointer().to_llvm(context)
 
 class VoidType(NamedType):
     is_void = True
@@ -462,8 +462,9 @@ class FunctionType(Type):
     is_vararg = False
 
     def to_llvm(self, context):
-        return lc.Type.function(self.return_type.to_llvm(),
-                                [arg_type.to_llvm() for arg_type in self.args],
+        return lc.Type.function(self.return_type.to_llvm(context),
+                                [arg_type.to_llvm(context)
+                                    for arg_type in self.args],
                                 self.is_vararg)
 
 #
