@@ -693,7 +693,7 @@ class FuncCallNode(Node):
     Call a function given a pointer or its name (FuncNameNode)
     """
 
-    child_attrs = ['name_or_pointer', 'args']
+    child_attrs = ['func_or_pointer', 'args']
 
 class ReturnNode(Node):
     "Return an operand"

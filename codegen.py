@@ -191,7 +191,7 @@ class CCodeGen(CodeGen):
         self.code.putln("}")
 
     def visit_FuncCallNode(self, node):
-        return "%s(%s)" % (self.visit(node.name_or_pointer),
+        return "%s(%s)" % (self.visit(node.func_or_pointer),
                            ", ".join(self.results(node.args)))
 
     def visit_FuncNameNode(self, node):

@@ -361,6 +361,17 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         stats.append(b.assign(pointer, first_element_pointer.operand))
         self.pointers[arg.variable] = pointer
 
+    def computer_inner_dim_pointers(self):
+        """
+        Return a list of statements for temporary pointers we can directly
+        index or add the final stride to.
+        """
+        stats = []
+        for arg in self.function.arguments:
+            if arg.is_array_funcarg:
+                self._compute_inner_dim_pointer(arg, stats)
+        return stats
+
     def visit_NDIterate(self, node):
         """
         Replace this node with ordered loops and a direct index into a
@@ -376,10 +387,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         for index in self.indices[:-2]:
             loop = node.body
 
-        stats = []
-        for arg in self.function.arguments:
-            if arg.is_array_funcarg:
-                self._compute_inner_dim_pointer(arg, stats)
+        stats = self.computer_inner_dim_pointers()
 
         inner_loop = b.pragma_for(loop.body)
         loop.body = b.stats(*(stats + [inner_loop]))
@@ -490,7 +498,7 @@ class ContigSpecializer(OrderedSpecializer):
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
 
-class CTiledStridedSpecializer(OrderedSpecializer):
+class CTiledStridedSpecializer(StridedSpecializer):
     """
     Generate tiled code for the last two (C) or first two (F) dimensions.
     The blocksize may be overridden through the get_blocksize method, in
@@ -561,12 +569,13 @@ class CTiledStridedSpecializer(OrderedSpecializer):
         # Generate the inner tiled loops
         outer_for_node = node.body
         inner_body = node.body
-        tiled_loop_body.stats.append(
-            b.pragma_for(
-                self.ordered_loop(
-                    node.body, self.indices,
-                    lower=lower, upper=upper,
-                    loop_order=self.tiled_order())))
+
+        inner_loops = self.ordered_loop(
+            node.body, self.indices,
+            lower=lower, upper=upper,
+            loop_order=self.tiled_order())
+
+        tiled_loop_body.stats.append(inner_loops)
 
         # Generate the outer loops (in case the array operands have more than
         # two dimensions)
@@ -583,6 +592,12 @@ class CTiledStridedSpecializer(OrderedSpecializer):
             self.indices = indices + self.indices
         else:
             self.indices = self.indices + indices
+
+        # Generate temporary pointers for all operands and insert just outside
+        # the innermost loop
+        stats = self.computer_inner_dim_pointers()
+        stats.append(b.pragma_for(inner_loops.body))
+        inner_loops.body = b.stats(*stats)
 
         return self.visit(body)
 
@@ -617,10 +632,11 @@ class CTiledStridedSpecializer(OrderedSpecializer):
             upper=lambda i: upper_limits[i]))
         return self.visit(body)
 
-    def _element_location(self, variable):
-        return self._strided_element_location(variable)
+    # def _element_location(self, variable):
+    #     return self._strided_element_location(variable)
 
-class FTiledStridedSpecializer(CTiledStridedSpecializer):
+class FTiledStridedSpecializer(StridedFortranSpecializer,
+                               CTiledStridedSpecializer):
     "Tile in Fortran order"
 
     specialization_name = "tiled_fortran"
