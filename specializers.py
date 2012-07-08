@@ -387,6 +387,9 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         for index in self.indices[:-2]:
             loop = node.body
 
+        # set this for subclasses
+        self.inner_loop = loop.body
+
         stats = self.computer_inner_dim_pointers()
 
         inner_loop = b.pragma_for(loop.body)
@@ -438,6 +441,36 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         return ((type.is_c_contig and self.order == "C") or
                 (type.is_f_contig and self.order == "F"))
 
+    def visit_NDIterate(self, node):
+        b = self.astbuilder
+        outer_loop = super(StridedSpecializer, self).visit_NDIterate(node)
+        stats = self.strength_reduce_inner_dimension(self.inner_loop)
+        self.inner_loop.body = b.stats(self.inner_loop.body, *stats)
+        return outer_loop
+
+    def strength_reduce_inner_dimension(self, inner_loop):
+        """
+        Reduce the strength of strided array operands in the inner dimension,
+        by adding the stride to the temporary pointer.
+        """
+        b = self.astbuilder
+
+        stats = []
+        for arg in self.function.arguments:
+            contig = self.matching_contiguity(arg.variable.type)
+            if arg.variable in self.pointers and not contig:
+                p = self.pointers[arg.variable]
+
+                if self.order == "C":
+                    inner_dim = arg.variable.type.ndim - 1
+                else:
+                    inner_dim = 0
+
+                stride = b.stride(arg.variable, inner_dim)
+                stats.append(b.assign(p, b.add(p, stride)))
+
+        return stats
+
     def _compute_inner_dim_pointer(self, arg, stats):
         #if self.matching_contiguity(arg.type):
         super(StridedSpecializer, self)._compute_inner_dim_pointer(arg, stats)
@@ -448,19 +481,11 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         """
         #if variable in self.pointers:
         if self.matching_contiguity(variable.type):
+            # Generate a direct index in the pointer
             return super(StridedSpecializer, self)._element_location(variable)
 
-        b = self.astbuilder
-        pointer = self.pointers[variable]
-        indices = [self.contig_index()]
-
-        if self.order == "C":
-            inner_dim = variable.type.ndim - 1
-        else:
-            inner_dim = 0
-
-        strides = [b.stride(variable, inner_dim)]
-        return self._index_pointer(pointer, indices, strides)
+        # strided access through temporary pointer
+        return self.astbuilder.dereference(self.pointers[variable])
 
 class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
                                 StridedSpecializer):
@@ -576,6 +601,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
             loop_order=self.tiled_order())
 
         tiled_loop_body.stats.append(inner_loops)
+        innermost_loop = inner_loops.body
 
         # Generate the outer loops (in case the array operands have more than
         # two dimensions)
@@ -598,6 +624,13 @@ class CTiledStridedSpecializer(StridedSpecializer):
         stats = self.computer_inner_dim_pointers()
         stats.append(b.pragma_for(inner_loops.body))
         inner_loops.body = b.stats(*stats)
+
+        # Apply strength reduction for the inner dimension's stride
+        # multiplication
+        pointer_adding_stats = self.strength_reduce_inner_dimension(
+            innermost_loop.body)
+        innermost_loop.body = b.stats(innermost_loop.body,
+                                      *pointer_adding_stats)
 
         return self.visit(body)
 
