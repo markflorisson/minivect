@@ -15,6 +15,8 @@ import minivisitor
 import miniutils
 import minitypes
 
+strength_reduction = True
+
 class ASTMapper(minivisitor.VisitorTransform):
     """
     Base class to map foreign ASTs onto a minivect AST, or vice-versa.
@@ -172,6 +174,31 @@ class Specializer(ASTMapper):
             b.funccall(b.funcname(functype, "PyErr_Format"),
                        [node.exc_var, node.msg_val] + node.fmt_args))
 
+    def get_type(self, type):
+        "Resolve the type to the dtype of the array if an array type"
+        if type.is_array:
+            return type.dtype
+        return type
+
+    def visit_BinopNode(self, node):
+        type = self.get_type(node.type)
+        if node.operator == '%' and type.is_float:
+            b = self.astbuilder
+            functype = minitypes.FunctionType(return_type=type,
+                                              args=[type, type])
+            if type.itemsize == 4:
+                modifier = "f"
+            elif type.itemsize == 8:
+                modifier = ""
+            else:
+                modifier = "l"
+
+            fmod = b.variable(functype, "fmod%s" % modifier)
+            return self.visit(b.funccall(fmod, [node.lhs, node.rhs]))
+
+        self.visitchildren(node)
+        return node
+
     def visit_ErrorHandler(self, node):
         """
         See miniast.ErrorHandler for an explanation of what this needs to do.
@@ -222,8 +249,8 @@ class OrderedSpecializer(Specializer):
         b = self.astbuilder
         # compute the product of the shape and insert it into the function body
         extents = [b.index(node.shape, b.constant(i))
-                   for i in range(node.ndim)]
-        node.total_shape = b.temp(node.shape.type.base_type.unqualify("const"))
+                       for i in range(node.ndim)]
+        node.total_shape = b.temp(node.shape.type.base_type)
         init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
         node.body = b.stats(init_shape, node.body)
         return node.total_shape
@@ -384,17 +411,22 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         # get the second to last loop node, since its body is the
         # penultimate loop node
         loop = node
-        for index in self.indices[:-2]:
-            loop = node.body
-
-        # set this for subclasses
-        self.inner_loop = loop.body
 
         stats = self.computer_inner_dim_pointers()
+        if len(self.indices) > 1:
+            for index in self.indices[:-2]:
+                loop = node.body
 
-        inner_loop = b.pragma_for(loop.body)
-        loop.body = b.stats(*(stats + [inner_loop]))
-        return self.visit(self.omp_for(node))
+            self.inner_loop = loop.body
+            stats.append(b.pragma_for(self.inner_loop))
+            loop.body = b.stats(*stats)
+            node = self.omp_for(node)
+        else:
+            self.inner_loop = loop
+            stats.append(self.omp_for(b.pragma_for(self.inner_loop)))
+            node = b.stats(*stats)
+
+        return self.visit(node)
 
     def strided_indices(self):
         "Return the list of strided indices for this order"
@@ -422,6 +454,91 @@ class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
     def contig_index(self):
         return self.indices[0]
 
+class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
+    """
+    Specialize on strided operands. If some operands are contiguous in the
+    dimension compatible with the order we are specializing for (the first
+    if Fortran, the last if C), then perform a direct index into a temporary
+    date pointer. For strided operands, perform strength reduction in the
+    inner dimension by adding the stride to the data pointer in each iteration.
+    """
+
+    specialization_name = "strength_reduced_strided"
+    order = "C"
+
+    def matching_contiguity(self, type):
+        """
+        Check whether the array operand for the given type can be directly
+        indexed.
+        """
+        return ((type.is_c_contig and self.order == "C") or
+                (type.is_f_contig and self.order == "F"))
+
+    def visit_NDIterate(self, node):
+        b = self.astbuilder
+        outer_loop = super(StridedSpecializer, self).visit_NDIterate(node)
+        outer_loop = self.strength_reduce_inner_dimension(outer_loop,
+                                                          self.inner_loop)
+        return outer_loop
+
+    def strength_reduce_inner_dimension(self, outer_loop, inner_loop):
+        """
+        Reduce the strength of strided array operands in the inner dimension,
+        by adding the stride to the temporary pointer.
+        """
+        b = self.astbuilder
+
+        outer_stats = []
+        stats = []
+        for arg in self.function.arguments:
+            type = arg.variable.type
+            if type is None:
+                continue
+
+            contig = self.matching_contiguity(type)
+            if arg.variable in self.pointers and not contig:
+                p = self.pointers[arg.variable]
+
+                if self.order == "C":
+                    inner_dim = type.ndim - 1
+                else:
+                    inner_dim = 0
+
+                # Implement: temp_stride = strides[inner_dim] / sizeof(dtype)
+                stride = b.stride(arg.variable, inner_dim)
+                temp_stride = b.temp(stride.type.qualify("const"),
+                                     name="temp_stride")
+                outer_stats.append(
+                    b.assign(temp_stride, b.div(stride, b.sizeof(type.dtype))))
+
+                # Implement: temp_pointer += temp_stride
+                stats.append(b.assign(p, b.add(p, temp_stride)))
+
+        inner_loop.body = b.stats(inner_loop.body, *stats)
+        outer_stats.append(outer_loop)
+        return b.stats(*outer_stats)
+
+    def _element_location(self, variable):
+        """
+        Generate a strided or directly indexed load of a single element.
+        """
+        if self.matching_contiguity(variable.type):
+            # Generate a direct index in the pointer
+            return super(StrengthReducingStridedSpecializer, self)._element_location(variable)
+
+        # strided access through temporary pointer
+        return self.astbuilder.dereference(self.pointers[variable])
+
+class StrengthReducingStridedFortranSpecializer(
+    StridedFortranInnerContigSpecializer, StrengthReducingStridedSpecializer):
+    """
+    Specialize on Fortran order for strided operands and apply strength
+    reduction in the inner dimension.
+    """
+
+    specialization_name = "strength_reduced_strided_fortran"
+    order = "F"
+
 class StridedSpecializer(StridedCInnerContigSpecializer):
     """
     Specialize on strided operands. If some operands are contiguous in the
@@ -441,36 +558,6 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         return ((type.is_c_contig and self.order == "C") or
                 (type.is_f_contig and self.order == "F"))
 
-    def visit_NDIterate(self, node):
-        b = self.astbuilder
-        outer_loop = super(StridedSpecializer, self).visit_NDIterate(node)
-        stats = self.strength_reduce_inner_dimension(self.inner_loop)
-        self.inner_loop.body = b.stats(self.inner_loop.body, *stats)
-        return outer_loop
-
-    def strength_reduce_inner_dimension(self, inner_loop):
-        """
-        Reduce the strength of strided array operands in the inner dimension,
-        by adding the stride to the temporary pointer.
-        """
-        b = self.astbuilder
-
-        stats = []
-        for arg in self.function.arguments:
-            contig = self.matching_contiguity(arg.variable.type)
-            if arg.variable in self.pointers and not contig:
-                p = self.pointers[arg.variable]
-
-                if self.order == "C":
-                    inner_dim = arg.variable.type.ndim - 1
-                else:
-                    inner_dim = 0
-
-                stride = b.stride(arg.variable, inner_dim)
-                stats.append(b.assign(p, b.add(p, stride)))
-
-        return stats
-
     def _compute_inner_dim_pointer(self, arg, stats):
         #if self.matching_contiguity(arg.type):
         super(StridedSpecializer, self)._compute_inner_dim_pointer(arg, stats)
@@ -481,11 +568,19 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         """
         #if variable in self.pointers:
         if self.matching_contiguity(variable.type):
-            # Generate a direct index in the pointer
             return super(StridedSpecializer, self)._element_location(variable)
 
-        # strided access through temporary pointer
-        return self.astbuilder.dereference(self.pointers[variable])
+        b = self.astbuilder
+        pointer = self.pointers[variable]
+        indices = [self.contig_index()]
+
+        if self.order == "C":
+            inner_dim = variable.type.ndim - 1
+        else:
+            inner_dim = 0
+
+        strides = [b.stride(variable, inner_dim)]
+        return self._index_pointer(pointer, indices, strides)
 
 class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
                                 StridedSpecializer):
@@ -495,6 +590,10 @@ class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
 
     specialization_name = "strided_fortran"
     order = "F"
+
+if strength_reduction:
+    StridedSpecializer = StrengthReducingStridedSpecializer
+    StridedFortranSpecializer = StrengthReducingStridedFortranSpecializer
 
 class ContigSpecializer(OrderedSpecializer):
     """
@@ -523,7 +622,9 @@ class ContigSpecializer(OrderedSpecializer):
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
 
-class CTiledStridedSpecializer(StridedSpecializer):
+class CTiledStridedSpecializer(
+    #StrengthReducingStridedSpecializer):
+    StridedSpecializer):
     """
     Generate tiled code for the last two (C) or first two (F) dimensions.
     The blocksize may be overridden through the get_blocksize method, in
@@ -625,12 +726,8 @@ class CTiledStridedSpecializer(StridedSpecializer):
         stats.append(b.pragma_for(inner_loops.body))
         inner_loops.body = b.stats(*stats)
 
-        # Apply strength reduction for the inner dimension's stride
-        # multiplication
-        pointer_adding_stats = self.strength_reduce_inner_dimension(
-            innermost_loop.body)
-        innermost_loop.body = b.stats(innermost_loop.body,
-                                      *pointer_adding_stats)
+        if strength_reduction:
+            body = self.strength_reduce_inner_dimension(body, innermost_loop)
 
         return self.visit(body)
 
@@ -669,6 +766,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
     #     return self._strided_element_location(variable)
 
 class FTiledStridedSpecializer(StridedFortranSpecializer,
+                               #StrengthReducingStridedFortranSpecializer,
                                CTiledStridedSpecializer):
     "Tile in Fortran order"
 

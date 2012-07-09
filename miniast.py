@@ -383,18 +383,21 @@ class ASTBuilder(object):
             result_type = self.context.promote_types(lhs.type, rhs.type)
         return self.binop(result_type, '+', lhs, rhs)
 
-    def mul(self, lhs, rhs, result_type=None):
+    def mul(self, lhs, rhs, result_type=None, op='*'):
         """
         Shorthand for the * binop. Filters out multiplication with 1 constants.
         """
-        if lhs.is_constant and lhs.value == 1:
+        if op == '*' and lhs.is_constant and lhs.value == 1:
             return rhs
         elif rhs.is_constant and rhs.value == 1:
             return lhs
 
         if result_type is None:
             result_type = self.context.promote_types(lhs.type, rhs.type)
-        return self.binop(result_type, '*', lhs, rhs)
+        return self.binop(result_type, op, lhs, rhs)
+
+    def div(self, lhs, rhs, result_type=None):
+        return self.mul(lhs, rhs, result_type=result_type, op='/')
 
     def min(self, lhs, rhs):
         """
@@ -460,9 +463,9 @@ class ASTBuilder(object):
         temp = self.temp(type)
         return self.expr(stats=[self.assign(temp, expr)], expr=temp)
 
-    def temp(self, type, name=None):
+    def temp(self, type, name=None, rhs=None):
         "Allocate a temporary of a given type"
-        return TempNode(self.pos, type, name=name or 'temp')
+        return TempNode(self.pos, type, name=name or 'temp', rhs=rhs)
 
     def constant(self, value, type=None):
         """
@@ -512,6 +515,10 @@ class ASTBuilder(object):
     def stride(self, variable, index):
         "Return the stride of array operand `variable` at integer `index`"
         return self.index(self.stridesvar(variable), self.constant(index))
+
+    def sizeof(self, type):
+        "Return the expression sizeof(type)"
+        return SizeofNode(self.pos, minitypes.size_t, sizeof_type=type)
 
     def jump(self, label):
         "Jump to a label"
@@ -594,6 +601,8 @@ class Node(miniutils.ComparableObjectMixin):
     is_data_pointer = False
     is_jump = False
     is_label = False
+    is_temp = False
+    is_statement = False
 
     is_funcarg = False
     is_array_funcarg = False
@@ -799,6 +808,7 @@ class StatListNode(Node):
 class ExprStatNode(Node):
     "Turn an expression into a statement, see :py:class:`ASTBuilder.expr_stat`"
     child_attrs = ['expr']
+    is_statement = True
 
 class ExprNodeWithStatement(Node):
     child_attrs = ['stat', 'expr']
@@ -898,6 +908,9 @@ class ConstantNode(ExprNode):
         super(ConstantNode, self).__init__(pos, type)
         self.value = value
 
+class SizeofNode(ExprNode):
+    is_sizeof = True
+
 class Variable(ExprNode):
     """
     Represents use of a function argument in the function.
@@ -906,8 +919,8 @@ class Variable(ExprNode):
     is_variable = True
     mangled_name = None
 
-    def __init__(self, pos, type, name):
-        super(Variable, self).__init__(pos, type)
+    def __init__(self, pos, type, name, **kwargs):
+        super(Variable, self).__init__(pos, type, **kwargs)
         self.name = name
 
     def __eq__(self, other):
@@ -937,6 +950,8 @@ class StridePointer(ArrayAttribute):
 
 class TempNode(Variable):
     "A temporary of a certain type"
+
+    child_attrs = ['rhs']
 
     is_temp = True
 

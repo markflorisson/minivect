@@ -85,7 +85,7 @@ class CCodeGen(CodeGen):
         self.declared_temps = set()
 
     def strip(self, expr_string):
-        if expr_string[0] == '(' and expr_string[-1] == ')':
+        if expr_string and expr_string[0] == '(' and expr_string[-1] == ')':
             return expr_string[1:-1]
         return expr_string
 
@@ -125,7 +125,10 @@ class CCodeGen(CodeGen):
         return node
 
     def visit_ExprStatNode(self, node):
-        self.code.putln(self.strip(self.visit(node.expr)) + ';')
+        node.expr.is_statement = True
+        result = self.visit(node.expr)
+        if result:
+            self.code.putln(self.strip(result) + ';')
 
     def visit_ExprNodeWithStatement(self, node):
         self.visit(node.stat)
@@ -204,20 +207,32 @@ class CCodeGen(CodeGen):
         self.code.putln("return %s;" % self.results(node.operand))
 
     def visit_BinopNode(self, node):
+        if node.operator == '%':
+            op = '%%'
+        else:
+            op = node.operator
         return "(%s %s %s)" % (self.visit(node.lhs),
-                               node.operator,
+                               op,
                                self.visit(node.rhs))
 
     def visit_UnopNode(self, node):
         return "(%s%s)" % (node.operator, self.visit(node.operand))
 
+    def _declare_temp(self, node, rhs_result=None):
+        node.name = "%s%d" % (self.code.mangle(node.name),
+                              len(self.declared_temps))
+        self.declared_temps.add(node)
+        code = self.code.declaration_levels[-1]
+        if rhs_result:
+            assignment = " = %s" % (rhs_result,)
+        else:
+            assignment = ""
+
+        code.putln("%s %s%s;" % (node.type, node.name, assignment))
+
     def visit_TempNode(self, node):
         if node not in self.declared_temps:
-            node.name = "%s%d" % (self.code.mangle(node.name),
-                                  len(self.declared_temps))
-            self.declared_temps.add(node)
-            code = self.code.declaration_levels[-1]
-            code.putln("%s %s;" % (node.type, node.name))
+            self._declare_temp(node)
 
         return node.name
 
@@ -225,8 +240,11 @@ class CCodeGen(CodeGen):
         if (node.rhs.is_binop and node.rhs.operator == '+' and
                 node.rhs.rhs.is_constant and node.rhs.rhs.value == 1):
             return "%s++" % self.visit(node.rhs.lhs)
-
-        return "(%s = %s)" % self.results(node.lhs, node.rhs)
+        elif (node.is_statement and node.lhs.is_temp and
+                  node.lhs not in self.declared_temps):
+            self._declare_temp(node.lhs, self.visit(node.rhs))
+        else:
+            return "(%s = %s)" % self.results(node.lhs, node.rhs)
 
     def visit_IfElseExprNode(self, node):
         return "(%s ? %s : %s)" % (self.results(node.cond, node.lhs, node.rhs))
@@ -239,6 +257,9 @@ class CCodeGen(CodeGen):
 
     def visit_SingleIndexNode(self, node):
         return "(%s[%s])" % self.results(node.lhs, node.rhs)
+
+    def visit_SizeofNode(self, node):
+        return "sizeof(%s)" % node.sizeof_type
 
     def visit_ArrayAttribute(self, node):
         return node.name
