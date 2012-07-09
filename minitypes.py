@@ -424,6 +424,7 @@ class Py_ssize_t_Type(IntLike):
     is_py_ssize_t = True
     name = "Py_ssize_t"
     rank = 9
+    signed = True
 
 class CharType(IntLike):
     is_char = True
