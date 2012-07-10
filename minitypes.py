@@ -382,25 +382,23 @@ class NumericType(NamedType):
     """
     is_numeric = True
 
-class IntLike(NumericType):
-    is_int_like = True
-
-class IntType(IntLike):
+class IntType(NumericType):
     is_int = True
+    is_int_like = True
     name = "int"
     signed = True
     rank = 4
     itemsize = 4
 
     def to_llvm(self, context):
-        if self.rank == 1:
+        if self.itemsize == 1:
             return lc.Type.int(8)
-        elif self.rank == 2:
+        elif self.itemsize == 2:
             return lc.Type.int(16)
-        elif self.rank == 4:
+        elif self.itemsize == 4:
             return lc.Type.int(32)
         else:
-            assert self.rank == 8
+            assert self.itemsize == 8, self
             return lc.Type.int(64)
 
 class FloatType(NumericType):
@@ -420,13 +418,13 @@ class ComplexType(NumericType):
     is_complex = True
     subtypes = ['base_type']
 
-class Py_ssize_t_Type(IntLike):
+class Py_ssize_t_Type(IntType):
     is_py_ssize_t = True
     name = "Py_ssize_t"
     rank = 9
     signed = True
 
-class CharType(IntLike):
+class CharType(IntType):
     is_char = True
     name = "char"
     rank = 1
