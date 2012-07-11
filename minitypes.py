@@ -254,7 +254,7 @@ class Type(miniutils.ComparableObjectMixin):
                              is_f_contig=step_idx == 0)
         else:
             verify_slice(item)
-            return ArrayType(self, 1, is_c_contig=item.step)
+            return ArrayType(self, 1, is_c_contig=bool(item.step))
 
     def to_llvm(self, context):
         "Get a corresponding llvm type from this type"
