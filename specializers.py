@@ -363,7 +363,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         self.indices = []
         self.pointers = {}
 
-    def _compute_inner_dim_pointer(self, arg, stats):
+    def _compute_inner_dim_pointer(self, arg, stats, tiled):
         """
         Compute the pointer to each 'row'.
 
@@ -381,14 +381,27 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
 
         dest_pointer_type = arg.data_pointer.type.unqualify('const')
         pointer = b.temp(dest_pointer_type)
+
+        indices = self.strided_indices()
+        if tiled:
+            # use all indices
+            ndim = arg.type.ndim
+            strides_offset = 0
+            assert len(indices) == ndim, (indices, ndim)
+            #indices = self.indices
+        else:
+            ndim = arg.type.ndim - 1
+            strides_offset = self.order == 'F'
+            #indices = self.strided_indices()
+
         first_element_pointer = self._strided_element_location(
-            arg, indices=self.strided_indices(),
-            strides_index_offset=self.order == 'F',
-            ndim=arg.type.ndim - 1)
+                    arg, indices=indices, strides_index_offset=strides_offset,
+                    ndim=ndim)
+
         stats.append(b.assign(pointer, first_element_pointer.operand))
         self.pointers[arg.variable] = pointer
 
-    def computer_inner_dim_pointers(self):
+    def computer_inner_dim_pointers(self, tiled=False):
         """
         Return a list of statements for temporary pointers we can directly
         index or add the final stride to.
@@ -396,7 +409,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         stats = []
         for arg in self.function.arguments:
             if arg.is_array_funcarg:
-                self._compute_inner_dim_pointer(arg, stats)
+                self._compute_inner_dim_pointer(arg, stats, tiled)
         return stats
 
     def visit_NDIterate(self, node):
@@ -582,6 +595,7 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         strides = [b.stride(variable, inner_dim)]
         return self._index_pointer(pointer, indices, strides)
 
+
 class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
                                 StridedSpecializer):
     """
@@ -673,7 +687,9 @@ class CTiledStridedSpecializer(
         # tiled loops
         upper_limits = {}
         stats = []
-        tiled_order = range(*self.tiled_order())
+        # sort the indices in forward order, to match up with the ordered
+        # indices
+        tiled_order = sorted(range(*self.tiled_order()))
         for i, index in zip(tiled_order, self.tiled_indices):
             upper_limit = b.temp(index.type)
             tiled_loop_body.stats.append(
@@ -722,7 +738,7 @@ class CTiledStridedSpecializer(
 
         # Generate temporary pointers for all operands and insert just outside
         # the innermost loop
-        stats = self.computer_inner_dim_pointers()
+        stats = self.computer_inner_dim_pointers(tiled=True)
         stats.append(b.pragma_for(inner_loops.body))
         inner_loops.body = b.stats(*stats)
 
@@ -762,6 +778,9 @@ class CTiledStridedSpecializer(
             upper=lambda i: upper_limits[i]))
         return self.visit(body)
 
+    def strided_indices(self):
+        return self.indices[:-1] + [self.tiled_indices[1]]
+
     # def _element_location(self, variable):
     #     return self._strided_element_location(variable)
 
@@ -779,3 +798,6 @@ class FTiledStridedSpecializer(StridedFortranSpecializer,
 
     def untiled_order(self):
         return 2, self.function.ndim, 1
+
+    def strided_indices(self):
+        return [self.tiled_indices[0]] + self.indices[1:]
