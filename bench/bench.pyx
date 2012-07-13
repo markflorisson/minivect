@@ -10,7 +10,11 @@ import time
 import string
 
 import numpy as np
-import numexpr
+try:
+    import numexpr
+except ImportError:
+    print "numexpr not found"
+    numexpr = None
 
 cdef extern from "fbench.h":
     void aplusb_ff(double *, double *, int, int)
@@ -96,14 +100,15 @@ cdef class Benchmark(object):
             self.fortran(operands, 1)
             times[fortran_name] = self.fortran(operands, self.N)
 
-        numexpr_dict = dict(zip(self.names, operands))
-        numexpr.set_num_threads(1)
-        self.numexpr(self.expr, numexpr_dict, 1)
-        times[numexpr_name] = self.numexpr(self.expr, numexpr_dict, self.N)
+        if numexpr is not None:
+            numexpr_dict = dict(zip(self.names, operands))
+            numexpr.set_num_threads(1)
+            self.numexpr(self.expr, numexpr_dict, 1)
+            times[numexpr_name] = self.numexpr(self.expr, numexpr_dict, self.N)
 
-        numexpr.set_num_threads(4)
-        self.numexpr(self.expr, numexpr_dict, 1)
-        times[numexpr_threaded] = self.numexpr(self.expr, numexpr_dict, self.N)
+            numexpr.set_num_threads(4)
+            self.numexpr(self.expr, numexpr_dict, 1)
+            times[numexpr_threaded] = self.numexpr(self.expr, numexpr_dict, self.N)
 
         return times
 
@@ -153,9 +158,11 @@ cdef class Benchmark(object):
         f = open(out, 'w')
         f.write(self.title(size_to_times) + '\n')
 
-        columns = [numpy_name, cython_name, numexpr_name, numexpr_threaded]
+        columns = [numpy_name, cython_name]
         if hasattr(self, 'fortran'):
             columns.append(fortran_name)
+        if numexpr is not None:
+            columns.extend((numexpr_name, numexpr_threaded))
 
         f.write('"%s" %s\n' % (self.xaxis, " ".join('"%s"' % col for col in columns)))
 
