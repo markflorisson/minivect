@@ -7,14 +7,14 @@ FC=gfortran-mp-4.7
 FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native
 
 # INTEL
-CC=icc
-CFLAGS=-O3
+#CC=icc
+#CFLAGS=-O3
 
-FC=ifort
-FFLAGS=-O3 -nofor_main
+#FC=ifort
+#FFLAGS=-O3 -nofor_main
 
-LD=ifort #cc
-LDFLAGS=-L/exports/applications/apps/SL5/intel/Compiler/11.0/081/lib/intel64/ -lifcore -limf
+#LD=ifort #cc
+#LDFLAGS=-L/exports/applications/apps/SL5/intel/Compiler/11.0/081/lib/intel64/ -lifcore -limf
 
 # NAGFOR (http://www.nag.com/nagware/np/r53_doc/nagfor.html)
 # FC=nagfor

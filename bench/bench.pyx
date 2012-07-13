@@ -19,8 +19,11 @@ except ImportError:
 cdef extern from "fbench.h":
     void aplusb_ff(double *, double *, int, int)
     void aplusb_fc(double *, double *, int, int)
+    void aplusb_cfcfcf(double *, double *, double *, double *, double *, double *, int, int, int)
     void aplusb_strided_cc(double *, double *, int, int, int)
     void aplusb_strided_fc(double *, double *, int, int, int)
+    void innercontig2d(double *, double *, double *, double *, int, int, int)
+
 
 # ctypedef fused dtype_t:
 #     int
@@ -158,9 +161,10 @@ cdef class Benchmark(object):
         f = open(out, 'w')
         f.write(self.title(size_to_times) + '\n')
 
-        columns = [numpy_name, cython_name]
+        columns = []
         if hasattr(self, 'fortran'):
             columns.append(fortran_name)
+        columns.extend([cython_name, numpy_name])
         if numexpr is not None:
             columns.extend((numexpr_name, numexpr_threaded))
 
@@ -203,7 +207,6 @@ cdef class Contig2dC(Benchmark):
     name = "a + b"
     expr = "a + b"
     orders = ['C', 'C']
-    sizes = [32, 64, 128, 256, 512, 1024, 2048, 4096]
 
     def cython(self, operands, Py_ssize_t ntimes):
         cdef int i
@@ -253,6 +256,62 @@ cdef class MixedContig2(Contig2dF):
         for i in range(ntimes):
             aplusb_fc(a, b, size1, size2)
 
+cdef class MixedStridedPathological(Benchmark):
+
+    name = "a.T[:, :] = a + b.T + c + d.T + e + f.T" # assume all oeprands C contig
+    expr = "a_T + b + c + d + e + f"
+    orders = ['F', 'F', 'C', 'F', 'C', 'F']
+
+    # N = 10
+
+    def get_operands(self, size):
+        operands = ops(size, size, self.dtype, self.orders)
+        return [op[::2, ::2] for op in operands]
+
+    def numpy(self, operands, Py_ssize_t ntimes):
+        cdef int i
+
+        a, b, c, d, e, f = operands
+
+        t = time.time()
+        for i in range(ntimes):
+            a[...] = a.T + b + c + d + e + f
+        return time.time() - t
+
+    def numexpr(self, expr, d, Py_ssize_t ntimes):
+        cdef int i
+        d['a_T'] = d['a'].T
+
+        t = time.time()
+        for i in range(ntimes):
+            numexpr.evaluate(expr, d, out=d['a'])
+        return time.time() - t
+
+    def fortran(self, operands, Py_ssize_t ntimes):
+        cdef int i
+        cdef double[:, :] a, b, c, d, e, f
+
+        a, b, c, d, e, f = operands
+
+        t = time.time()
+        self._fortran(&a[0, 0], &b[0, 0], &c[0, 0], &d[0, 0], &e[0, 0], &f[0, 0], a.shape[0], a.shape[1], ntimes)
+        return time.time() - t
+
+    cdef _fortran(self, double *a, double *b, double *c, double *d, double *e, double *f,
+                        int size1, int size2, Py_ssize_t ntimes):
+        for i in range(ntimes):
+            aplusb_cfcfcf(a, b, c, d, e, f, size1, size2, 2)
+
+    def cython(self, operands, Py_ssize_t ntimes):
+        cdef int i
+        cdef double[:, :] a, b, c, d, e, f
+        a, b, c, d, e, f = operands
+
+        t = time.time()
+        for i in range(ntimes):
+            a[...] = a.T + b + c + d + e + f
+        return time.time() - t
+
 
 cdef class Strided(Contig2dF):
     name = "a + b"
@@ -301,12 +360,71 @@ cdef class MixedStrided(Strided):
         for i in range(ntimes):
             aplusb_strided_fc(a, b, size1, size2, self.stride)
 
+cdef class InnerContig(Benchmark):
+    name = "Inner Contiguous"
+    orders = ['F', 'F', 'F', 'F']
+    expr = "a + b + c + d"
 
-contig_benchmarks = [Contig2dC, Contig2dF, MixedContig, MixedContig2]
-strided_benchmarks = [Strided, MixedStrided]
+    def get_operands(self, size):
+        operands = ops(size, size, self.dtype, self.orders)
+        return [op[:, ::2] for op in operands]
 
-benchmarks = contig_benchmarks + strided_benchmarks
+    def numpy(self, operands, Py_ssize_t ntimes):
+        cdef int i
+
+        a, b, c, d = operands
+
+        t = time.time()
+        for i in range(ntimes):
+            np.add(a, b, out=a)
+            np.add(a, c, out=a)
+            np.add(a, d, out=a)
+        return time.time() - t
+
+    def fortran(self, operands, Py_ssize_t ntimes):
+        cdef int i
+        cdef double[:, :] a, b, c, d
+
+        a, b, c, d = operands
+
+        t = time.time()
+        self._fortran(&a[0, 0], &b[0, 0], &c[0, 0], &d[0, 0], a.shape[0], a.shape[1], ntimes)
+        return time.time() - t
+
+    cdef _fortran(self, double *a, double *b, double *c, double *d, int size1, int size2, Py_ssize_t ntimes):
+        for i in range(ntimes):
+            innercontig2d(a, b, c, d, size1, size2, 2)
+
+    def cython(self, operands, Py_ssize_t ntimes):
+        cdef int i
+        cdef double[:, :] a, b, c, d
+        a, b, c, d = operands
+
+        t = time.time()
+        for i in range(ntimes):
+            a[...] = a + b + c + d
+        return time.time() - t
+
+contig_benchmarks = [
+    # Contig2dC,
+    Contig2dF,
+    #MixedContig,
+    MixedContig2,
+]
+
+strided_benchmarks = [
+    Strided,
+    MixedStrided,
+    InnerContig,
+]
+
+pathological = [
+    MixedStridedPathological,
+]
+
+benchmarks = contig_benchmarks + strided_benchmarks + pathological
 # benchmarks = strided_benchmarks
+# benchmarks = pathological
 
 def run():
     try:
