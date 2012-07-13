@@ -424,6 +424,9 @@ class Py_ssize_t_Type(IntType):
     rank = 9
     signed = True
 
+    def to_llvm(self, context):
+        return context.to_llvm(self)
+
 class CharType(IntType):
     is_char = True
     name = "char"
