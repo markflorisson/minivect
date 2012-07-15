@@ -7,6 +7,7 @@ Simple hacked-up benchmarks for minivect.
 
 import os
 import time
+import math
 import string
 
 import numpy as np
@@ -38,6 +39,9 @@ DEF fortran_name = 'Fortran'
 
 ctypedef double dtype_t
 
+cdef inline double gettime():
+    return time.time()
+
 def ops(size1, size2, dtype, orders):
     arrays = []
     for order in orders:
@@ -49,27 +53,32 @@ cdef class Benchmark(object):
     name = None
     sizes = None
 
-    N = 50
+    cdef int nouter
+    cdef int ninner
     dtype = np.double
     names = string.ascii_letters
     sizes = [32, 64, 128, 256, 512, 1024, 2048, 4096]
     strides = None
 
-    xaxis = "Data Size"
+    xaxis = "Data Size (power of two)"
+
+    def __init__(self, nouter=5, ninner=50):
+        self.nouter = nouter
+        self.ninner = ninner
 
     cdef verify_result(self, size):
         numpy_operands = self.get_operands(size)
-        self.numpy(numpy_operands, 1)
+        self.numpy(numpy_operands, 1, 1)
         numpy_result = numpy_operands[0]
 
         cython_operands = self.get_operands(size)
-        self.cython(cython_operands, 1)
+        self.cython(cython_operands, 1, 1)
         cython_result = cython_operands[0]
 
         fortran_result = None
         if hasattr(self, 'fortran'):
             fortran_operands = self.get_operands(size)
-            self.fortran(fortran_operands, 1)
+            self.fortran(fortran_operands, 1, 1)
             fortran_result = fortran_operands[0]
 
         if not np.allclose(numpy_result, cython_result):
@@ -86,32 +95,35 @@ cdef class Benchmark(object):
             raise Exception
 
     def run_size(self, size):
-        cdef int i
+        cdef int i, j
 
         self.verify_result(size)
 
         times = {}
         operands = self.get_operands(size)
 
-        self.numpy(operands, 1)
-        times[numpy_name] = self.numpy(operands, self.N)
+        cdef int nouter = self.get_nouter(size)
+        cdef int ninner = self.get_ninner(size)
 
-        self.cython(operands, 1)
-        times[cython_name] = self.cython(operands, self.N)
+        self.numpy(operands, 1, 1)
+        times[numpy_name] = self.numpy(operands, nouter, ninner)
+
+        self.cython(operands, 1, 1)
+        times[cython_name] = self.cython(operands, nouter, ninner)
 
         if hasattr(self, 'fortran'):
-            self.fortran(operands, 1)
-            times[fortran_name] = self.fortran(operands, self.N)
+            self.fortran(operands, 1, 1)
+            times[fortran_name] = self.fortran(operands, nouter, ninner)
 
         if numexpr is not None:
             numexpr_dict = dict(zip(self.names, operands))
             numexpr.set_num_threads(1)
-            self.numexpr(self.expr, numexpr_dict, 1)
-            times[numexpr_name] = self.numexpr(self.expr, numexpr_dict, self.N)
+            self.numexpr(self.expr, numexpr_dict, 1, 1)
+            times[numexpr_name] = self.numexpr(self.expr, numexpr_dict, nouter, ninner)
 
             numexpr.set_num_threads(4)
-            self.numexpr(self.expr, numexpr_dict, 1)
-            times[numexpr_threaded] = self.numexpr(self.expr, numexpr_dict, self.N)
+            self.numexpr(self.expr, numexpr_dict, 1, 1)
+            times[numexpr_threaded] = self.numexpr(self.expr, numexpr_dict, nouter, ninner)
 
         return times
 
@@ -125,6 +137,9 @@ cdef class Benchmark(object):
         self.dumpfile(d, out)
 
     def title(self, size_to_times):
+        return self.name
+
+    def _title(self, size_to_times):
         order = self.orders[0]
         for new_order in self.orders[1:]:
             if new_order != order:
@@ -151,7 +166,7 @@ cdef class Benchmark(object):
         print self.title(size_to_times)
         for size, times in sorted(size_to_times.iteritems()):
             for name, time in times.iteritems():
-                print size, name, time
+                print size, name, self.flops(size, time), "MFlops", time, "seconds"
 
             print
 
@@ -168,160 +183,229 @@ cdef class Benchmark(object):
         if numexpr is not None:
             columns.extend((numexpr_name, numexpr_threaded))
 
-        f.write('"%s" %s\n' % (self.xaxis, " ".join('"%s"' % col for col in columns)))
+        f.write('"%s" %s\n' % (self.xaxis,
+                               " ".join('"%s"' % col for col in columns)))
 
         for size, times in sorted(size_to_times.iteritems()):
-            f.write("%d %s\n" % (size, " ".join(str(times[col]) for col in columns)))
+            f.write("%d %s\n" % (int(math.log(size, 2)),
+                                 " ".join(str(self.flops(size, times[col]))
+                                                  for col in columns)))
 
         f.close()
-
-    def numexpr(self, expr, d, Py_ssize_t ntimes):
-        cdef int i
-
-        t = time.time()
-        for i in range(ntimes):
-            numexpr.evaluate(expr, d, out=d['a'])
-        return time.time() - t
 
     def get_operands(self, size):
         return ops(size, size, self.dtype, self.orders)
 
-    def cython(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def flop(self, size):
+        return size * size * (len(self.orders) - 1) * self.get_ninner(size)
 
-        t = time.time()
-        for i in range(ntimes):
-            self._cython(operands)
-        return time.time() - t
+    def flops(self, size, time):
+        return self.flop(size) / time / 1024 ** 2
 
-    def numpy(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def get_nouter(self, size):
+        return self.nouter
 
-        t = time.time()
-        for i in range(ntimes):
-            self._numpy(*operands)
-        return time.time() - t
+    def get_ninner(self, size):
+        if size < 256:
+            return self.ninner * (256/size)**2
+        return self.ninner
+
+    def numexpr(self, expr, d, int nouter, int ninner):
+        cdef int i, j
+
+        cdef double t
+        times = []
+        out = d['a']
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                numexpr.evaluate(expr, d, out=out)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
+
+    def numpy(self, operands, int nouter, int ninner):
+        cdef int i, j
+
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                self._numpy(*operands)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
 
 cdef class Contig2dC(Benchmark):
-    name = "a + b"
+    name = "2D Double Precision, C Contig"
     expr = "a + b"
     orders = ['C', 'C']
 
-    def cython(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def cython(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b
         a, b = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            a[...] = a + b
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                a[...] = a + b
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
-    def numpy(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def numpy(self, operands, int nouter, int ninner):
+        cdef int i, j
         a, b = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            np.add(a, b, out=a)
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                np.add(a, b, out=a)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
 cdef class Contig2dF(Contig2dC):
+    name = "2D Double Precision, Fortan Contig"
     orders = ['F', 'F']
 
-    def fortran(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def fortran(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b
 
+        cdef double *ap, *bp
+        cdef int size1, size2
+
         a, b = operands
+        ap = &a[0, 0]
+        bp = &b[0, 0]
+        size1 = a.shape[0]
+        size2 = a.shape[1]
 
-        t = time.time()
-        self._fortran(&a[0, 0], &b[0, 0], a.shape[0], a.shape[1], ntimes)
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                self._fortran(ap, bp, size1, size2)
+            t = gettime() - t
+            times.append(t)
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            aplusb_ff(a, b, size1, size2)
+        return min(times)
 
-cdef class MixedContig(Contig2dC):
-    name = 'a[...] = a[:, ::1] + b[::1, :]'
-    orders = ['C', 'F']
+    cdef _fortran(self, double *a, double *b, int size1, int size2):
+        aplusb_ff(a, b, size1, size2)
+
+# cdef class MixedContig(Contig2dC):
+#     orders = ['C', 'F']
 
 cdef class MixedContig2(Contig2dF):
-    name = 'a[...] = a[::1, :] + b[:, ::1]'
+    name = "2D Double Precision, Mixed Contig Order"
     orders = ['F', 'C']
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            aplusb_fc(a, b, size1, size2)
+    cdef _fortran(self, double *a, double *b, int size1, int size2):
+        aplusb_fc(a, b, size1, size2)
 
 cdef class MixedStridedPathological(Benchmark):
 
-    name = "a.T[:, :] = a + b.T + c + d.T + e + f.T" # assume all oeprands C contig
+    #name = "a.T[:, :] = a + b.T + c + d.T + e + f.T" # assume all oeprands C contig
+    name = "2D Double Precision, Mixed Strided Order\\n6 operands"
     expr = "a_T + b + c + d + e + f"
     orders = ['F', 'F', 'C', 'F', 'C', 'F']
-
-    # N = 10
 
     def get_operands(self, size):
         operands = ops(size, size, self.dtype, self.orders)
         return [op[::2, ::2] for op in operands]
 
-    def numpy(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def flop(self, size):
+        return super(MixedStridedPathological, self).flop(size) / 4
+
+    def numpy(self, operands, int nouter, int ninner):
+        cdef int i, j
 
         a, b, c, d, e, f = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            a[...] = a.T + b + c + d + e + f
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                a[...] = a.T + b + c + d + e + f
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
-    def numexpr(self, expr, d, Py_ssize_t ntimes):
-        cdef int i
+    def numexpr(self, expr, d, int nouter, int ninner):
+        cdef int i, j
         d['a_T'] = d['a'].T
 
-        t = time.time()
-        for i in range(ntimes):
-            numexpr.evaluate(expr, d, out=d['a'])
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                numexpr.evaluate(expr, d, out=d['a'])
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
-    def fortran(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def fortran(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b, c, d, e, f
 
         a, b, c, d, e, f = operands
+        cdef double *ap, *bp, *cp, *dp, *ep, *fp
+        ap = &a[0, 0]; bp = &b[0, 0]; cp = &c[0, 0]; dp = &d[0, 0]; ep =  &e[0, 0]; fp = &f[0, 0]
+        cdef int size1 = a.shape[0]
+        cdef int size2 = a.shape[1]
 
-        t = time.time()
-        self._fortran(&a[0, 0], &b[0, 0], &c[0, 0], &d[0, 0], &e[0, 0], &f[0, 0], a.shape[0], a.shape[1], ntimes)
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                self._fortran(ap, bp, cp, dp, ep, fp, size1, size2)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
     cdef _fortran(self, double *a, double *b, double *c, double *d, double *e, double *f,
-                        int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            aplusb_cfcfcf(a, b, c, d, e, f, size1, size2, 2)
+                        int size1, int size2):
+        aplusb_cfcfcf(a, b, c, d, e, f, size1, size2, 2)
 
-    def cython(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def cython(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b, c, d, e, f
         a, b, c, d, e, f = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            a[...] = a.T + b + c + d + e + f
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                a[...] = a.T + b + c + d + e + f
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
 
 cdef class Strided(Contig2dF):
-    name = "a + b"
+    name = "2D Double Precision, Strided, C order"
     strides = [2, 4, 8, 16, 32, 64, 128]
     size = 512
     orders = ['C', 'C']
+
     cdef int stride
     # order = ['C', 'C', 'F']
 
-    xaxis = "Stride"
+    xaxis = "Stride (power of two)"
 
     def run(self, out):
         d = {}
@@ -331,6 +415,12 @@ cdef class Strided(Contig2dF):
 
         self.report(d)
         self.dumpfile(d, out)
+
+    def flop(self, stride):
+        return self.size ** 2
+
+    def get_ninner(self, stride):
+        return self.ninner
 
     def get_operands(self, stride):
         operands = []
@@ -349,19 +439,18 @@ cdef class Strided(Contig2dF):
 
         return operands
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            aplusb_strided_cc(a, b, size1, size2, self.stride)
+    cdef _fortran(self, double *a, double *b, int size1, int size2):
+        aplusb_strided_cc(a, b, size1, size2, self.stride)
 
 cdef class MixedStrided(Strided):
+    name = "2D Double Precision, Strided, Mixed Order"
     orders = ['F', 'C']
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            aplusb_strided_fc(a, b, size1, size2, self.stride)
+    cdef _fortran(self, double *a, double *b, int size1, int size2):
+        aplusb_strided_fc(a, b, size1, size2, self.stride)
 
 cdef class InnerContig(Benchmark):
-    name = "Inner Contiguous"
+    name = "2D Double Precision, Strided Inner Contig\\n4 operands"
     orders = ['F', 'F', 'F', 'F']
     expr = "a + b + c + d"
 
@@ -369,41 +458,64 @@ cdef class InnerContig(Benchmark):
         operands = ops(size, size, self.dtype, self.orders)
         return [op[:, ::2] for op in operands]
 
-    def numpy(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def flop(self, size):
+        return super(InnerContig, self).flop(size) / 2
+
+    def numpy(self, operands, int nouter, int ninner):
+        cdef int i, j
 
         a, b, c, d = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            np.add(a, b, out=a)
-            np.add(a, c, out=a)
-            np.add(a, d, out=a)
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                np.add(a, b, out=a)
+                np.add(a, c, out=a)
+                np.add(a, d, out=a)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
-    def fortran(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    def fortran(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b, c, d
 
         a, b, c, d = operands
 
-        t = time.time()
-        self._fortran(&a[0, 0], &b[0, 0], &c[0, 0], &d[0, 0], a.shape[0], a.shape[1], ntimes)
-        return time.time() - t
+        cdef double *ap, *bp, *cp, *dp
+        ap = &a[0, 0]; bp = &b[0, 0]; cp = &c[0, 0]; dp = &d[0, 0]
+        cdef int size1 = a.shape[0]
+        cdef int size2 = a.shape[1]
 
-    cdef _fortran(self, double *a, double *b, double *c, double *d, int size1, int size2, Py_ssize_t ntimes):
-        for i in range(ntimes):
-            innercontig2d(a, b, c, d, size1, size2, 2)
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                self._fortran(ap, bp, cp, dp, size1, size2)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
-    def cython(self, operands, Py_ssize_t ntimes):
-        cdef int i
+    cdef _fortran(self, double *a, double *b, double *c, double *d, int size1, int size2):
+        innercontig2d(a, b, c, d, size1, size2, 2)
+
+    def cython(self, operands, int nouter, int ninner):
+        cdef int i, j
         cdef double[:, :] a, b, c, d
         a, b, c, d = operands
 
-        t = time.time()
-        for i in range(ntimes):
-            a[...] = a + b + c + d
-        return time.time() - t
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                a[...] = a + b + c + d
+            t = gettime() - t
+            times.append(t)
+        return min(times)
 
 contig_benchmarks = [
     # Contig2dC,
@@ -433,4 +545,4 @@ def run():
         pass
 
     for i, benchmark in enumerate(benchmarks):
-        benchmark().run("out/out%d" % i)
+        benchmark().run("out/out%d.txt" % i)
