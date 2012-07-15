@@ -397,7 +397,7 @@ cdef class MixedStridedPathological(Benchmark):
 
 
 cdef class Strided(Contig2dF):
-    name = "2D Double Precision, Strided, C order"
+    name = "2D Double Precision, Strided, C Order"
     strides = [2, 4, 8, 16, 32, 64, 128]
     size = 512
     orders = ['C', 'C']
@@ -417,7 +417,7 @@ cdef class Strided(Contig2dF):
         self.dumpfile(d, out)
 
     def flop(self, stride):
-        return self.size ** 2
+        return self.size ** 2 * self.get_ninner(stride)
 
     def get_ninner(self, stride):
         return self.ninner
