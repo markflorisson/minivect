@@ -11,19 +11,18 @@
 # Grid Engine options
 
 #$ -cwd
-#$ -l h_rt=00:20:00
+#$ -l h_rt=00:50:00
 #$ -N bench
 
 
-
-#-  #$ -pe OpenMP 4
+# - #$ -pe OpenMP 4
 
 # initiallise environment module
 
 . /etc/profile.d/modules.sh
 
-#PATH+=:/exports/home/s1149948/apps/bin:/exports/home/s1149948/bin
-#export PATH
+PATH+=:/exports/home/s1149948/apps/bin:/exports/home/s1149948/bin
+export PATH
 
 PYTHONPATH+=:/exports/home/s1149948/packages
 export PYTHONPATH
@@ -31,6 +30,7 @@ export PYTHONPATH
 # use Intel compilers (icc,ifort)
 
 module load python/current
-module load intel/compiler/latest
+module load intel/compiler/12.0
 
-python -c 'import bench; bench.run()'
+echo starting
+numactl --cpunodebind 0 --membind 0 python2.7 -c 'import bench; bench.run()'

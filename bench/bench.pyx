@@ -521,16 +521,16 @@ contig_benchmarks = [
     # Contig2dC,
     Contig2dF,
     #MixedContig,
-    MixedContig2,
 ]
 
 strided_benchmarks = [
     Strided,
-    MixedStrided,
     InnerContig,
 ]
 
 pathological = [
+    MixedStrided,
+    MixedContig2,
     MixedStridedPathological,
 ]
 
