@@ -57,12 +57,12 @@ cdef class Benchmark(object):
     cdef int ninner
     dtype = np.double
     names = string.ascii_letters
-    sizes = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    sizes = [400, 800, 1200, 1600, 2000, 2400]
     strides = None
 
-    xaxis = "Data Size (power of two)"
+    xaxis = "Data Size"
 
-    def __init__(self, nouter=5, ninner=50):
+    def __init__(self, nouter=2, ninner=5): # nouter=5, ninner=50):
         self.nouter = nouter
         self.ninner = ninner
 
@@ -187,7 +187,7 @@ cdef class Benchmark(object):
                                " ".join('"%s"' % col for col in columns)))
 
         for size, times in sorted(size_to_times.iteritems()):
-            f.write("%d %s\n" % (int(math.log(size, 2)),
+            f.write("%d %s\n" % (size, #int(math.log(size, 2)),
                                  " ".join(str(self.flops(size, times[col]))
                                                   for col in columns)))
 
@@ -399,7 +399,7 @@ cdef class MixedStridedPathological(Benchmark):
 cdef class Strided(Contig2dF):
     name = "2D Double Precision, Strided, C Order"
     strides = [2, 4, 8, 16, 32, 64, 128]
-    size = 512
+    size = 400
     orders = ['C', 'C']
 
     cdef int stride
