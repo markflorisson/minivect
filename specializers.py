@@ -409,7 +409,12 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         stats = []
         for arg in self.function.arguments:
             if arg.is_array_funcarg:
-                self._compute_inner_dim_pointer(arg, stats, tiled)
+                if arg.type.ndim >= 2:
+                    self._compute_inner_dim_pointer(arg, stats, tiled)
+                else:
+                    self.pointers[arg.variable] = arg.data_pointer
+                    arg.data_pointer.type = arg.data_pointer.type.unqualify("const")
+
         return stats
 
     def visit_NDIterate(self, node):
@@ -537,7 +542,8 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
         """
         if self.matching_contiguity(variable.type):
             # Generate a direct index in the pointer
-            return super(StrengthReducingStridedSpecializer, self)._element_location(variable)
+            sup = super(StrengthReducingStridedSpecializer, self)
+            return sup._element_location(variable)
 
         # strided access through temporary pointer
         return self.astbuilder.dereference(self.pointers[variable])

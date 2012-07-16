@@ -225,7 +225,7 @@ class ASTBuilder(object):
                             error_value=self.constant(-1),
                             success_value=self.constant(0))
 
-    def funcarg(self, variable, *variables):
+    def funcarg(self, variable, *variables, **kwargs):
         """
         Create a (compound) function argument consisting of one or multiple
         argument Variables.
