@@ -247,7 +247,7 @@ class ASTBuilder(object):
         "Generate a Py_INCREF() statement"
         functype = minitypes.FunctionType(return_type=minitypes.void,
                                           args=[minitypes.object_])
-        py_incref = self.variable(functype, funcname)
+        py_incref = self.funcname(functype, funcname)
         return self.expr_stat(self.funccall(py_incref, [var]))
 
     def decref(self, var):
@@ -260,15 +260,18 @@ class ASTBuilder(object):
 
     def funccall(self, func_or_pointer, args):
         """
-        Generate a call to the given function (a :py:class:`Variable`) of
+        Generate a call to the given function (a :py:class:`FuncNameNode`) of
         :py:class:`minivect.minitypes.FunctionType` or a
         pointer to a function type and the given arguments.
         """
         type = func_or_pointer.type
         if type.is_pointer:
             type = func_or_pointer.type.base_type
-        return FuncCallNode(self.pos, type=type,
+        return FuncCallNode(self.pos, type,
                             func_or_pointer=func_or_pointer, args=args)
+
+    def funcname(self, type, name):
+        return FuncNameNode(self.pos, type, name=name)
 
     def nditerate(self, body):
         """
@@ -697,12 +700,18 @@ class FunctionNode(Node):
                                           if arg.type and arg.type.is_array)
 
 
-class FuncCallNode(Node):
+class FuncCallNode(ExprNode):
     """
     Call a function given a pointer or its name (FuncNameNode)
     """
 
     child_attrs = ['func_or_pointer', 'args']
+
+class FuncNameNode(ExprNode):
+    """
+    Load an external function by its name.
+    """
+    name = None
 
 class ReturnNode(Node):
     "Return an operand"

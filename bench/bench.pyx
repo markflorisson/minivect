@@ -62,7 +62,7 @@ cdef class Benchmark(object):
 
     xaxis = "Data Size"
 
-    def __init__(self, nouter=2, ninner=5): # nouter=5, ninner=50):
+    def __init__(self, nouter=5, ninner=50):
         self.nouter = nouter
         self.ninner = ninner
 
