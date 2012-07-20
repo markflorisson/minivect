@@ -146,8 +146,10 @@ class CCodeGen(CodeGen):
 
     def visit_OpenMPLoopNode(self, node):
         self.code.putln("#ifdef _OPENMP")
-        self.code.putln("#pragma omp parallel for if(%s)" %
-                                            self.visit(node.if_clause))
+        lastprivates = self.results(node.lastprivates)
+        self.code.putln("#pragma omp parallel for if(%s) lastprivate(%s)" %
+                                            (self.visit(node.if_clause),
+                                             ", ".join(lastprivates)))
         self.code.putln("#endif")
         self.visit(node.for_node)
 
@@ -240,6 +242,10 @@ class CCodeGen(CodeGen):
         if (node.rhs.is_binop and node.rhs.operator == '+' and
                 node.rhs.rhs.is_constant and node.rhs.rhs.value == 1):
             return "%s++" % self.visit(node.rhs.lhs)
+        elif node.rhs.is_binop and node.lhs == node.rhs.lhs:
+            return "(%s %s= %s)" % (self.visit(node.lhs),
+                                    node.rhs.operator,
+                                    self.visit(node.rhs.rhs))
         elif (node.is_statement and node.lhs.is_temp and
                   node.lhs not in self.declared_temps):
             self._declare_temp(node.lhs, self.visit(node.rhs))
@@ -308,3 +314,62 @@ class CCodeGen(CodeGen):
 
         self.visit(node.cascade)
         return node
+
+
+class VectorCodegen(CCodeGen):
+
+    types = {
+        minitypes.VectorType(minitypes.float_, 4) : '_mm_%s_ps',
+        minitypes.VectorType(minitypes.float_, 8) : '_mm256_%s_ps',
+        minitypes.VectorType(minitypes.double, 4) : '_mm_%s_pd',
+        minitypes.VectorType(minitypes.double, 8) : '_mm256_%s_pd',
+    }
+
+    binops = {
+        '+': 'add',
+        '*': 'mul',
+        '-': 'sub',
+        '/': 'div',
+        # pow not supported
+        # floordiv not supported
+        # mod not supported
+
+        '<': 'cmplt',
+        '<=': 'cmple',
+        '==': 'cmpeq',
+        '!=': 'cmpne',
+        '>=': 'cmpge',
+        '>': 'cmpgt',
+    }
+
+    def visit_VectorVariable(self, node):
+        return self.visit(node.variable)
+
+    def visit_VectorLoadNode(self, node):
+        load = self.types[node.type] % 'loadu'
+        return '%s(%s)' % (load, self.visit(node.operand))
+
+    def visit_AssignmentExpr(self, node):
+        if node.lhs.type.is_pointer and node.rhs.type.is_vector:
+            # Assignment to data pointer
+            assert node.lhs.type.base_type == node.rhs.type.element_type
+            store = self.types[node.rhs.type] % 'storeu'
+            return '%s(%s, %s)' % (store, self.visit(node.lhs),
+                                          self.visit(node.rhs))
+        else:
+            return super(VectorCodegen, self).visit_AssignmentExpr(node)
+
+    def visit_VectorBinopNode(self, node):
+        binop_name = self.binops[node.operator]
+        func_name =  self.types[node.lhs.type] % binop_name
+        return '%s(%s, %s)' % (func_name, self.visit(node.lhs),
+                                          self.visit(node.rhs))
+
+    def visit_ConstantVectorNode(self, node):
+        func_template = self.types[node.type]
+        if node.constant == 0:
+            return func_template % 'setzero'
+        else:
+            func = func_template % 'set'
+            c = node.constant
+            return '%s(%s, %s, %s, %s)' % (func, c, c, c, c)

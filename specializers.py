@@ -10,12 +10,16 @@ https://github.com/markflorisson88/cython/blob/_array_expressions/Cython/Utility
 """
 
 import copy
+import functools
 
 import minivisitor
 import miniutils
 import minitypes
 
 strength_reduction = True
+
+def specialize_ast(ast):
+    return copy.deepcopy(ast)
 
 class ASTMapper(minivisitor.VisitorTransform):
     """
@@ -44,32 +48,22 @@ class ASTMapper(minivisitor.VisitorTransform):
         self.astbuilder.pos = prev
         return result
 
-class Specializer(ASTMapper):
+class BaseSpecializer(ASTMapper):
     """
-    Base class for all specializers. Implement visit_* methods to specialize
-    nodes to some pattern.
-
-    Implements implementations to handle errors and cleanups, adds a return
-    statement to the function and can insert debug print statements if
-    context.debug is set to a true value.
+    Base class for specialization. Does not perform any specialization itself.
     """
-
-    is_contig_specializer = False
-    is_tiled_specializer = False
-
-    def __init__(self, context, specialization_name=None):
-        super(Specializer, self).__init__(context)
-        if specialization_name is not None:
-            self.specialization_name = specialization_name
-
-        self.variables = {}
-        self.error_handlers = []
 
     def getpos(self, node):
         return node.pos
 
+    def get_type(self, type):
+        "Resolve the type to the dtype of the array if an array type"
+        if type.is_array:
+            return type.dtype
+        return type
+
     def visit(self, node, *args):
-        result = super(Specializer, self).visit(node)
+        result = super(BaseSpecializer, self).visit(node)
         if result is not None:
             result.is_specialized = True
         return result
@@ -78,6 +72,43 @@ class Specializer(ASTMapper):
         # node = copy.copy(node)
         self.visitchildren(node)
         return node
+
+    #
+    ### Stubs for cooperative multiple inheritance
+    #
+
+    def visit_NDIterate(self, node):
+        # Do not visit children
+        return node
+
+    visit_AssignmentExpr = visit_Node
+    visit_ErrorHandler = visit_Node
+    visit_BinopNode = visit_Node
+    visit_UnopNode = visit_Node
+
+class Specializer(BaseSpecializer):
+    """
+    Base class for most specializers, provides some basic functionality
+    for subclasses. Implement visit_* methods to specialize nodes
+    to some pattern.
+
+    Implements implementations to handle errors and cleanups, adds a return
+    statement to the function and can insert debug print statements if
+    context.debug is set to a true value.
+    """
+
+    is_contig_specializer = False
+    is_tiled_specializer = False
+    is_vectorizing_specializer = False
+
+    vectorized_equivalents = None
+
+    def __init__(self, context, specialization_name=None):
+        super(Specializer, self).__init__(context)
+        if specialization_name is not None:
+            self.specialization_name = specialization_name
+
+        self.variables = {}
 
     def _index_list(self, pointer, ndim):
         "Return a list of indexed pointers"
@@ -91,10 +122,16 @@ class Specializer(ASTMapper):
         """
         stats = [
             b.print_(b.constant("Calling function %s (%s specializer)" % (
-                                       node.name, self.specialization_name))),
-            b.print_(b.constant("shape:"), *self._index_list(node.shape,
-                                                             node.ndim)),
+                                       node.name, self.specialization_name)))
         ]
+        if self.is_vectorizing_specializer:
+            stats.append(
+                b.print_(b.constant("Vectorized version size=%d" %
+                                                        self.vector_size)))
+
+        stats.append(
+            b.print_(b.constant("shape:"), *self._index_list(node.shape,
+                                                             node.ndim)))
         if self.is_tiled_specializer:
             stats.append(b.print_(b.constant("blocksize:"), self.get_blocksize()))
 
@@ -146,6 +183,76 @@ class Specializer(ASTMapper):
             self.variables[node.name] = node
         return self.visit_Node(node)
 
+    def get_data_pointer(self, variable):
+        return self.function.args[variable.name].data_pointer
+
+    def omp_for(self, node):
+        """
+        Insert an OpenMP for loop with an 'if' clause that checks to see
+        whether the total data size exceeds the given OpenMP auto-tuned size.
+        The caller needs to adjust the size, set in the FunctionNode's
+        'omp_size' attribute, depending on the number of computations.
+        """
+        if_clause = self.astbuilder.binop(minitypes.bool_, '>',
+                                          self.function.total_shape,
+                                          self.function.omp_size)
+        return self.astbuilder.omp_for(node, if_clause)
+
+class FinalSpecializer(BaseSpecializer):
+    """
+    Perform any final specialization and optimizations. The initial specializer
+    is concerned with specializing for the given data layouts, whereas this
+    specializer is concerned with any rewriting of the AST to support
+    fundamental operations.
+    """
+
+    vectorized_equivalents = None
+
+    def __init__(self, context, previous_specializer):
+        super(FinalSpecializer, self).__init__(context)
+        self.previous_specialer = previous_specializer
+        self.error_handlers = []
+
+    def visit_FunctionNode(self, node):
+        self.function = node
+        self.visitchildren(node)
+        return node
+
+    def visit_BinopNode(self, node):
+        type = self.get_type(node.type)
+        if node.operator == '%' and type.is_float:
+            # rewrite module for floats
+            b = self.astbuilder
+            functype = minitypes.FunctionType(return_type=type,
+                                              args=[type, type])
+            if type.itemsize == 4:
+                modifier = "f"
+            elif type.itemsize == 8:
+                modifier = ""
+            else:
+                modifier = "l"
+
+            fmod = b.variable(functype, "fmod%s" % modifier)
+            return self.visit(b.funccall(fmod, [node.lhs, node.rhs]))
+
+        self.visitchildren(node)
+        return node
+
+    def visit_UnopNode(self, node):
+        if node.type.is_vector and node.operator == '-':
+            # rewrite unary subtract
+            type = node.operand.type
+            if type.is_float:
+                constant = 0.0
+            else:
+                constant = 0
+            lhs = self.astbuilder.vector_const(type, constant)
+            node = self.astbuilder.binop(type, '-', lhs, node.operand)
+            return self.visit(node)
+
+        self.visitchildren(node)
+        return node
+
     def visit_PositionInfoNode(self, node):
         """
         Replace with the setting of positional source information in case
@@ -174,31 +281,6 @@ class Specializer(ASTMapper):
             b.funccall(b.funcname(functype, "PyErr_Format"),
                        [node.exc_var, node.msg_val] + node.fmt_args))
 
-    def get_type(self, type):
-        "Resolve the type to the dtype of the array if an array type"
-        if type.is_array:
-            return type.dtype
-        return type
-
-    def visit_BinopNode(self, node):
-        type = self.get_type(node.type)
-        if node.operator == '%' and type.is_float:
-            b = self.astbuilder
-            functype = minitypes.FunctionType(return_type=type,
-                                              args=[type, type])
-            if type.itemsize == 4:
-                modifier = "f"
-            elif type.itemsize == 8:
-                modifier = ""
-            else:
-                modifier = "l"
-
-            fmod = b.variable(functype, "fmod%s" % modifier)
-            return self.visit(b.funccall(fmod, [node.lhs, node.rhs]))
-
-        self.visitchildren(node)
-        return node
-
     def visit_ErrorHandler(self, node):
         """
         See miniast.ErrorHandler for an explanation of what this needs to do.
@@ -224,22 +306,20 @@ class Specializer(ASTMapper):
         self.error_handlers.pop()
         return node
 
-    def omp_for(self, node):
-        """
-        Insert an OpenMP for loop with an 'if' clause that checks to see
-        whether the total data size exceeds the given OpenMP auto-tuned size.
-        The caller needs to adjust the size, set in the FunctionNode's
-        'omp_size' attribute, depending on the number of computations.
-        """
-        if_clause = self.astbuilder.binop(minitypes.bool_, '>',
-                                          self.function.total_shape,
-                                          self.function.omp_size)
-        return self.astbuilder.omp_for(node, if_clause)
+    def visit_PragmaForLoopNode(self, node):
+        if self.previous_specialer.is_vectorizing_specializer:
+            node = node.for_node
+
+        self.visitchildren(node)
+        return node
+
 
 class OrderedSpecializer(Specializer):
     """
     Specializer that understands C and Fortran data layout orders.
     """
+
+    vectorized_equivalents = None
 
     def compute_total_shape(self, node):
         """
@@ -348,6 +428,224 @@ class OrderedSpecializer(Specializer):
         self.visitchildren(node)
         return node
 
+def get_any_array_argument(arguments):
+    for arg in arguments:
+        if arg.type is not None and arg.type.is_array:
+            return arg
+
+class CanVectorizeVisitor(minivisitor.TreeVisitor):
+    """
+    Determines whether we can vectorize a given expression.
+    """
+
+    can_vectorize = True
+
+    def _valid_type(self, type):
+        if type.is_array:
+            type = type.dtype
+        return type.is_float and type.itemsize in (4, 8)
+
+    def visit_FunctionNode(self, node):
+        array_dtypes = [
+            arg.type.dtype for arg in node.arguments[1:]
+                               if arg.type is not None and arg.type.is_array]
+
+        all_the_same = miniutils.all(
+                dtype == array_dtypes[0] for dtype in array_dtypes)
+        self.can_vectorize = all_the_same and self._valid_type(array_dtypes[0])
+
+        if self.can_vectorize:
+            self.visitchildren(node)
+
+    def visit_BinopNode(self, node):
+        if node.lhs.type != node.rhs.type or not self._valid_type(node.lhs.type):
+            self.can_vectorize = False
+        else:
+            self.visitchildren(node)
+
+    def visit_UnopNode(self, node):
+        if self._valid_type(node.type):
+            self.visitchildren(node)
+        else:
+            self.can_vectorize = False
+
+    def visit_FuncCallNode(self, node):
+        self.can_vectorize = False
+
+    def visit_NodeWrapper(self, node):
+        # TODO: dispatch to self.context.can_vectorize
+        self.can_vectorize = False
+
+    def visit_Node(self, node):
+        self.visitchildren(node)
+
+def visit_if_should_vectorize(func):
+    @functools.wraps(func)
+    def wrapper(self, node):
+        if self.should_vectorize:
+            return func(self, node)
+        else:
+            method = getattr(super(VectorizingSpecializer, self), func.__name__)
+            return method(node)
+    return wrapper
+
+class VectorizingSpecializer(Specializer):
+    """
+    Generate explicitly vectorized code if supported.
+
+    :param vector_size: number of 32-bit operands supported in the vector
+    """
+
+    is_vectorizing_specializer = True
+
+    in_lhs_expr = False
+    can_vectorize_visitor = CanVectorizeVisitor
+    vectorized_equivalents = None
+
+    # set in subclasses
+    vector_size = None
+
+    def __init__(self, context, specialization_name=None):
+        super(VectorizingSpecializer, self).__init__(context,
+                                                     specialization_name)
+        # temporary registers
+        self.temps = {}
+        # assignments to temporary registers
+        self.assignments = []
+
+        # Flag to vectorize expressions in a vectorized loop
+        self.should_vectorize = True
+
+    @classmethod
+    def can_vectorize(cls, context, ast):
+        visitor = cls.can_vectorize_visitor(context)
+        visitor.visit(ast)
+        return visitor.can_vectorize
+
+    @visit_if_should_vectorize
+    def visit_FunctionNode(self, node):
+        self.dtype = get_any_array_argument(node.arguments).type.dtype
+        return super(VectorizingSpecializer, self).visit_FunctionNode(node)
+
+    @visit_if_should_vectorize
+    def visit_AssignmentExpr(self, node):
+        # assignment expressions should not be nested
+        self.in_lhs_expr = True
+        node.lhs = self.visit(node.lhs)
+        self.in_lhs_expr = False
+        node.rhs = self.visit(node.rhs)
+        return node
+
+    @visit_if_should_vectorize
+    def visit_Variable(self, variable):
+        b = self.astbuilder
+
+        if variable.type.is_array:
+            # For array operands, load reads into registers, and store
+            # writes back into the data pointer. For assignment to a register
+            # we use a vector type, for assignment to a data pointer, the
+            # data pointer type
+            data_pointer = self.get_data_pointer(variable)
+#            data_pointer = b.data_pointer(self.function.args[variable.name])
+            data_pointer = b.add(data_pointer, self.contig_index())
+            if self.in_lhs_expr:
+                return data_pointer
+            else:
+                variable = b.vector_variable(data_pointer, self.vector_size)
+                if variable in self.temps:
+                    return self.temps[variable]
+
+                rhs = b.vector_load(variable, self.vector_size)
+                temp = b.temp(variable.type, 'xmm')
+                self.temps[variable] = temp
+                self.assignments.append(b.assign(temp, rhs))
+                return self.visit(temp)
+        else:
+            return super(VectorizingSpecializer, self).visit_Variable(variable)
+
+    @visit_if_should_vectorize
+    def visit_BinopNode(self, node):
+        self.visitchildren(node)
+        if node.lhs.type.is_vector:
+            # TODO: promotion
+            node = self.astbuilder.vector_binop(node.operator,
+                                                node.lhs, node.rhs)
+
+        return node
+
+    @visit_if_should_vectorize
+    def visit_UnopNode(self, node):
+        self.visitchildren(node)
+        if node.operand.type.is_vector:
+            if node.operator == '+':
+                node = node.operand
+            else:
+                assert node.operator == '~'
+                raise NotImplementedError
+                node = self.astbuilder.vector_unop(node.type, node.operator,
+                                                   self.visit(node.operand))
+
+        return node
+
+    def _modify_inner_loop(self, b, elements_per_vector, node, step):
+        """
+        Turn 'for (i = 0; i < N; i++)' into 'for (i = 0; i < N - 3; i += 4)'
+        for a vector size of 4. In case the data size is not a multiple of
+        4, we can only SIMDize that part, and need a fixup loop for any
+        remaining elements. Returns the upper limit and the counter (N and i).
+        """
+        i = node.step.lhs
+        N = node.condition.rhs
+
+        # Adjust step
+        step = b.mul(step, b.constant(elements_per_vector))
+        node.step = b.assign_expr(i, b.add(i, step))
+
+        # Adjust condition
+        vsize_minus_one = b.constant(elements_per_vector - 1)
+        node.condition.rhs = b.sub(N, vsize_minus_one)
+
+        return N, i
+
+    def fixup_loop(self, i, N, body, elements_per_vector):
+        """
+        Generate a loop to fix up any remaining elements that didn't fit into
+        our SIMD vectors.
+        """
+        b = self.astbuilder
+
+        if elements_per_vector - 1 == 1:
+            cond = b.binop(minitypes.bool_, '<', i, N)
+            fixup_loop = b.if_(cond, body)
+        else:
+            fixup_loop = b.for_range_upwards(body, lower=i, upper=N)
+
+        self.should_vectorize = False
+        fixup_loop = self.visit(fixup_loop)
+        self.should_vectorize = True
+
+        return fixup_loop
+
+    def process_inner_forloop(self, node, original_expression, step=None):
+        """
+        Process an inner loop, adjusting the step accordingly and injecting
+        any temporary assignments where necessary. Returns the fixup loop,
+        needed when the data size is not a multiple of the vector size.
+
+        :param original_expression: original, unmodified, array expression (
+                                    the body of the NDIterate node)
+        """
+        b = self.astbuilder
+
+        if step is None:
+            step = b.constant(1)
+
+        node.body = b.stats(b.stats(*self.assignments), node.body)
+        elements_per_vector = self.vector_size * 4 / self.dtype.itemsize
+
+        N, i = self._modify_inner_loop(b, elements_per_vector, node, step)
+        return self.fixup_loop(i, N, original_expression, elements_per_vector)
+
 class StridedCInnerContigSpecializer(OrderedSpecializer):
     """
     Specialize on the first or last dimension being contiguous (depending
@@ -356,6 +654,8 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
 
     specialization_name = "inner_contig_c"
     order = "C"
+
+    vectorized_equivalents = None
 
     def __init__(self, context, specialization_name=None):
         super(StridedCInnerContigSpecializer, self).__init__(context,
@@ -406,31 +706,27 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         Return a list of statements for temporary pointers we can directly
         index or add the final stride to.
         """
+        b = self.astbuilder
         stats = []
         for arg in self.function.arguments:
             if arg.is_array_funcarg:
                 if arg.type.ndim >= 2:
                     self._compute_inner_dim_pointer(arg, stats, tiled)
                 else:
-                    self.pointers[arg.variable] = arg.data_pointer
-                    arg.data_pointer.type = arg.data_pointer.type.unqualify("const")
+                    # Note: we have to allocate a temp, since the pointer is
+                    #       going to be modified!
+                    temp = b.temp(arg.data_pointer.type.unqualify("const"))
+                    stats.append(b.assign(temp, arg.data_pointer))
+                    self.pointers[arg.variable] = temp
 
         return stats
 
-    def visit_NDIterate(self, node):
+    def _generate_inner_loop(self, b, node, stats):
         """
-        Replace this node with ordered loops and a direct index into a
-        temporary data pointer in the contiguous dimension.
+        Generate innermost loop, injecting the pointer assignments in the
+        right place
         """
-        b = self.astbuilder
-        # start by generating a C or Fortran ordered loop
-        node = self.ordered_loop(node.body, self.indices)
-
-        # get the second to last loop node, since its body is the
-        # penultimate loop node
         loop = node
-
-        stats = self.computer_inner_dim_pointers()
         if len(self.indices) > 1:
             for index in self.indices[:-2]:
                 loop = node.body
@@ -444,7 +740,40 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
             stats.append(self.omp_for(b.pragma_for(self.inner_loop)))
             node = b.stats(*stats)
 
-        return self.visit(node)
+        return loop, node
+
+    def _vectorize_inner_loop(self, b, loop, node, original_expr):
+        "Vectorize the inner loop and insert the fixup loop"
+        if self.is_vectorizing_specializer:
+            fixup_loop = self.process_inner_forloop(self.inner_loop,
+                                                    original_expr)
+            if len(self.indices) > 1:
+                loop.body.stats.append(fixup_loop)
+            else:
+                node = b.stats(node, fixup_loop)
+
+        return node
+
+    def visit_NDIterate(self, node):
+        """
+        Replace this node with ordered loops and a direct index into a
+        temporary data pointer in the contiguous dimension.
+        """
+        b = self.astbuilder
+
+        original_expr = specialize_ast(node.body)
+
+        # start by generating a C or Fortran ordered loop
+        node = self.ordered_loop(node.body, self.indices)
+        # Create assignments for temporary pointers just outside the innermost
+        # loop
+        stats = self.computer_inner_dim_pointers()
+        # Inject the pointers in the inner loop
+        loop, node = self._generate_inner_loop(b, node, stats)
+        result = self.visit(node)
+        node = self._vectorize_inner_loop(b, loop, node, original_expr)
+
+        return result
 
     def strided_indices(self):
         "Return the list of strided indices for this order"
@@ -453,6 +782,9 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
     def contig_index(self):
         "The contiguous index"
         return self.indices[-1]
+
+    def get_data_pointer(self, variable):
+        return self.pointers[variable]
 
     def _element_location(self, variable):
         data_pointer = self.pointers[variable]
@@ -466,11 +798,14 @@ class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
     order = "F"
     specialization_name = "inner_contig_fortran"
 
+    vectorized_equivalents = None
+
     def strided_indices(self):
         return self.indices[1:]
 
     def contig_index(self):
         return self.indices[0]
+
 
 class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
     """
@@ -483,6 +818,8 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
 
     specialization_name = "strength_reduced_strided"
     order = "C"
+
+    vectorized_equivalents = None
 
     def matching_contiguity(self, type):
         """
@@ -558,6 +895,8 @@ class StrengthReducingStridedFortranSpecializer(
     specialization_name = "strength_reduced_strided_fortran"
     order = "F"
 
+    vectorized_equivalents = None
+
 class StridedSpecializer(StridedCInnerContigSpecializer):
     """
     Specialize on strided operands. If some operands are contiguous in the
@@ -568,6 +907,8 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
 
     specialization_name = "strided"
     order = "C"
+
+    vectorized_equivalents = None
 
     def matching_contiguity(self, type):
         """
@@ -611,6 +952,8 @@ class StridedFortranSpecializer(StridedFortranInnerContigSpecializer,
     specialization_name = "strided_fortran"
     order = "F"
 
+    vectorized_equivalents = None
+
 if strength_reduction:
     StridedSpecializer = StrengthReducingStridedSpecializer
     StridedFortranSpecializer = StrengthReducingStridedFortranSpecializer
@@ -628,11 +971,20 @@ class ContigSpecializer(OrderedSpecializer):
         Generate a single ForNode over the total data size.
         """
         b = self.astbuilder
+        original_expr = specialize_ast(node.body)
+        node = super(ContigSpecializer, self).visit_NDIterate(node)
+
         for_node = b.for_range_upwards(node.body,
                                        upper=self.function.total_shape)
         node = self.omp_for(b.pragma_for(for_node))
         self.target = for_node.target
-        return self.visit(node)
+        node = self.visit(node)
+
+        if self.is_vectorizing_specializer:
+            fixup_loop = self.process_inner_forloop(for_node, original_expr)
+            node = b.stats(node, fixup_loop)
+
+        return node
 
     def visit_StridePointer(self, node):
         return None
@@ -641,6 +993,10 @@ class ContigSpecializer(OrderedSpecializer):
         "Directly index the data pointer"
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
+
+    def contig_index(self):
+        return self.target
+
 
 class CTiledStridedSpecializer(
     #StrengthReducingStridedSpecializer):
@@ -653,6 +1009,8 @@ class CTiledStridedSpecializer(
     specialization_name = "tiled_c"
     order = "C"
     is_tiled_specializer = True
+
+    vectorized_equivalents = None
 
     def get_blocksize(self):
         """
@@ -807,3 +1165,21 @@ class FTiledStridedSpecializer(StridedFortranSpecializer,
 
     def strided_indices(self):
         return [self.tiled_indices[0]] + self.indices[1:]
+
+#
+### Vectorized specializer equivalents
+#
+def create_vectorized_specializers(specializer_cls):
+    bases = (VectorizingSpecializer, specializer_cls)
+    d = dict(vectorized_equivalents=None)
+    name = 'Vectorized%%d%s' % specializer_cls.__name__
+    cls1 = type(name % 4, bases, dict(d, vector_size=4))
+    cls2 = type(name % 8, bases, dict(d, vector_size=8))
+    return cls1, cls2
+
+ContigSpecializer.vectorized_equivalents = (
+                create_vectorized_specializers(ContigSpecializer))
+StridedCInnerContigSpecializer.vectorized_equivalents = (
+                create_vectorized_specializers(StridedCInnerContigSpecializer))
+StridedFortranInnerContigSpecializer.vectorized_equivalents = (
+                create_vectorized_specializers(StridedFortranInnerContigSpecializer))

@@ -11,6 +11,7 @@ import types
 import minitypes
 import miniutils
 import minivisitor
+import specializers
 import minicode
 import codegen
 
@@ -74,12 +75,13 @@ class Context(object):
 
     debug = False
 
-    codegen_cls = UndocClassAttribute(codegen.CodeGen)
+    codegen_cls = UndocClassAttribute(codegen.VectorCodegen)
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
     codewriter_cls = UndocClassAttribute(minicode.CodeWriter)
     codeformatter_cls = UndocClassAttribute(minicode.CodeFormatter)
 
     specializer_mixin_cls = None
+    final_specializer = UndocClassAttribute(specializers.FinalSpecializer)
 
     def __init__(self, astbuilder=None, typemapper=None):
         self.astbuilder = astbuilder or ASTBuilder(self)
@@ -104,8 +106,13 @@ class Context(object):
                 specializer_class = type(name, (cls1, cls2), {})
 
             specializer = specializer_class(self)
-            specialized_ast = specializer.visit(copy.deepcopy(ast))
+            specialized_ast = specializer.visit(
+                                    specializers.specialize_ast(ast))
+            final_specializer = self.final_specializer(self, specializer)
+            specialized_ast = final_specializer.visit(specialized_ast)
+
             # specialized_ast.print_tree(self)
+
             codewriter = self.codewriter_cls(self)
             visitor = self.codegen_cls(self, codewriter)
             visitor.visit(specialized_ast)
@@ -323,8 +330,11 @@ class ASTBuilder(object):
                           executed sequentially (to avoid synchronization
                           overhead)
         """
+        if isinstance(for_node, PragmaForLoopNode):
+            for_node = for_node.for_node
         return OpenMPLoopNode(self.pos, for_node=for_node,
-                              if_clause=if_clause)
+                              if_clause=if_clause,
+                              lastprivates=[for_node.init.lhs])
 
     def pragma_for(self, for_node):
         """
@@ -373,7 +383,7 @@ class ASTBuilder(object):
         """
         return BinopNode(self.pos, type, op, lhs, rhs)
 
-    def add(self, lhs, rhs, result_type=None):
+    def add(self, lhs, rhs, result_type=None, op='+'):
         """
         Shorthand for the + binop. Filters out adding 0 constants.
         """
@@ -384,7 +394,10 @@ class ASTBuilder(object):
 
         if result_type is None:
             result_type = self.context.promote_types(lhs.type, rhs.type)
-        return self.binop(result_type, '+', lhs, rhs)
+        return self.binop(result_type, op, lhs, rhs)
+
+    def sub(self, lhs, rhs, result_type=None):
+        return self.add(lhs, rhs, result_type, op='-')
 
     def mul(self, lhs, rhs, result_type=None, op='*'):
         """
@@ -575,6 +588,40 @@ class ASTBuilder(object):
         return NodeWrapper(self.context.getpos(opaque_node), type,
                            opaque_node, specialize_node_callback, **kwds)
 
+    #
+    ### Vectorization Functionality
+    #
+
+    def vector_variable(self, variable, size):
+        "Return a vector variable for a data pointer variable"
+        type = minitypes.VectorType(element_type=variable.type.base_type,
+                                    vector_size=size)
+        return VectorVariable(self.pos, type, variable=variable)
+
+    def vector_load(self, variable, size):
+        "Load a SIMD vector of size `size` given an array operand variable"
+        assert variable.type.is_array or variable.type.is_vector
+        if variable.type.is_array:
+            variable = self.vector_variable(variable, size)
+        return VectorLoadNode(self.pos, variable.type, variable, size=size)
+
+    def vector_store(self, variable, size):
+        "Store a SIMD vector of size `size`"
+        type = self.vector_variable(variable, size).type
+        return VectorStoreNode(self.pos, type, variable, size=size)
+
+    def vector_binop(self, operator, lhs, rhs):
+        "Perform a binary SIMD operation between two operands of the same type"
+        assert lhs.type == rhs.type, (lhs.type, rhs.type)
+        type = lhs.type
+        return VectorBinopNode(self.pos, type, operator, lhs=lhs, rhs=rhs)
+
+    def vector_unop(self, type, operator, operand):
+        return VectorUnopNode(self.pos, type, operator, operand)
+
+    def vector_const(self, type, constant):
+        return ConstantVectorNode(self.pos, type, constant=constant)
+
 class Position(object):
     "Each node has a position which is an instance of this type."
 
@@ -632,6 +679,11 @@ class Node(miniutils.ComparableObjectMixin):
         visitor.visit(self)
 
     @property
+    def children(self):
+        return [getattr(self, attr) for attr in self.child_attrs
+                    if getattr(self, attr) is not None]
+
+    @property
     def comparison_objects(self):
         type = getattr(self, 'type', None)
         if type is None:
@@ -647,7 +699,7 @@ class Node(miniutils.ComparableObjectMixin):
     def __hash__(self):
         h = hash(type(self))
         for obj in self.comparison_objects:
-            h = h ^ hash(subtype)
+            h = h ^ hash(obj)
 
         return h
 
@@ -869,8 +921,8 @@ class BinopNode(BinaryOperationNode):
 
     is_binop = True
 
-    def __init__(self, pos, type, operator, lhs, rhs):
-        super(BinopNode, self).__init__(pos, type, lhs, rhs)
+    def __init__(self, pos, type, operator, lhs, rhs, **kwargs):
+        super(BinopNode, self).__init__(pos, type, lhs, rhs, **kwargs)
         self.operator = operator
 
     @property
@@ -880,8 +932,8 @@ class BinopNode(BinaryOperationNode):
 class SingleOperandNode(ExprNode):
     "Base class for operations with one operand"
     child_attrs = ['operand']
-    def __init__(self, pos, type, operand):
-        super(SingleOperandNode, self).__init__(pos, type)
+    def __init__(self, pos, type, operand, **kwargs):
+        super(SingleOperandNode, self).__init__(pos, type, **kwargs)
         self.operand = operand
 
 class AssignmentExpr(BinaryOperationNode):
@@ -894,8 +946,8 @@ class UnopNode(SingleOperandNode):
 
     is_unop = True
 
-    def __init__(self, pos, type, operator, operand):
-        super(UnopNode, self).__init__(pos, type, operand)
+    def __init__(self, pos, type, operator, operand, **kwargs):
+        super(UnopNode, self).__init__(pos, type, operand, **kwargs)
         self.operator = operator
 
     @property
@@ -974,7 +1026,7 @@ class OpenMPLoopNode(Node):
     """
     Execute a loop in parallel.
     """
-    child_attrs = ['for_node', 'if_clause']
+    child_attrs = ['for_node', 'if_clause', 'lastprivates']
 
 class PragmaForLoopNode(Node):
     """
@@ -1040,3 +1092,25 @@ class LabelNode(ExprNode):
         super(LabelNode, self).__init__(pos, None)
         self.name = name
         self.mangled_name = None
+
+#
+### Vectorization Functionality
+#
+
+class VectorVariable(ExprNode):
+    child_attrs = ['variable']
+
+class VectorLoadNode(SingleOperandNode):
+    "Load a SIMD vector"
+
+class VectorStoreNode(SingleOperandNode):
+    "Store a SIMD vector"
+
+class VectorBinopNode(BinopNode):
+    "Binary operation on SIMD vectors"
+
+class VectorUnopNode(SingleOperandNode):
+    "Unary operation on SIMD vectors"
+
+class ConstantVectorNode(ExprNode):
+    "Load the constant into the vector register"

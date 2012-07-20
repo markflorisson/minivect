@@ -345,6 +345,7 @@ class TypeWrapper(Type):
 
 class NamedType(Type):
     name = None
+
     def __eq__(self, other):
         return isinstance(other, NamedType) and self.name == other.name
 
@@ -402,6 +403,10 @@ class IntType(NumericType):
 
 class FloatType(NumericType):
     is_float = True
+
+    @property
+    def comparison_type_list(self):
+        return self.subtype_list + [self.itemsize]
 
     def to_llvm(self, context):
         if self.itemsize == 4:
@@ -464,6 +469,39 @@ class FunctionType(Type):
                                 [arg_type.to_llvm(context)
                                     for arg_type in self.args],
                                 self.is_vararg)
+
+class VectorType(Type):
+    subtypes = ['element_type']
+    is_vector = True
+    vector_size = None
+
+    def __init__(self, element_type, vector_size, **kwds):
+        super(VectorType, self).__init__(**kwds)
+        assert ((element_type.is_int or element_type.is_float) and
+                element_type.itemsize in (4, 8)), element_type
+        self.element_type = element_type
+        self.vector_size = vector_size
+
+    def to_llvm(self, context):
+        return lc.Type.vector(self.element_type.to_llvm(context),
+                              self.vector_size)
+
+    @property
+    def comparison_type_list(self):
+        return self.subtype_list + [self.vector_size]
+
+    def __str__(self):
+        itemsize = self.element_type.itemsize
+        if self.element_type.is_float:
+            if itemsize == 4:
+                return '__m128'
+            else:
+                return '__m128d'
+        else:
+            if itemsize == 4:
+                return '__m128i'
+            else:
+                raise NotImplementedError
 
 #
 ### Internal types
