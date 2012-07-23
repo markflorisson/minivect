@@ -14,6 +14,7 @@ import minivisitor
 import specializers
 import minicode
 import codegen
+import graphviz
 
 class UndocClassAttribute(object):
     def __init__(self, cls):
@@ -70,6 +71,11 @@ class Context(object):
         functionality. This class should likely participate
         cooperatively in MI.
 
+    .. attribute: graphviz_cls
+
+        Visitor to generate a Graphviz graph. See the :py:module:`graphviz`
+        module.
+
     Use subclass :py:class:`CContext` to get the defaults for C code generation.
     """
 
@@ -79,18 +85,23 @@ class Context(object):
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
     codewriter_cls = UndocClassAttribute(minicode.CodeWriter)
     codeformatter_cls = UndocClassAttribute(minicode.CodeFormatter)
+    graphviz_cls = UndocClassAttribute(graphviz.GraphvizGenerator)
 
     specializer_mixin_cls = None
     final_specializer = UndocClassAttribute(specializers.FinalSpecializer)
 
-    def __init__(self, astbuilder=None, typemapper=None):
-        self.astbuilder = astbuilder or ASTBuilder(self)
-        self.typemapper = typemapper or minitypes.TypeMapper(self)
+    def __init__(self):
+        self.init()
+
+    def init(self):
+        self.astbuilder = ASTBuilder(self)
+        self.typemapper = minitypes.TypeMapper(self)
 
     def run_opaque(self, astmapper, opaque_ast, specializers):
         return self.run(astmapper.visit(opaque_ast), specializers)
 
-    def run(self, ast, specializer_classes):
+    def run(self, ast, specializer_classes, graphviz_outfile=None,
+            print_tree=False):
         """
         Specialize the given AST with all given specializers and return
         an iterable of generated code in the form of
@@ -100,6 +111,7 @@ class Context(object):
         depending on the code formatter used.
         """
         for specializer_class in specializer_classes:
+            self.init()
             if self.specializer_mixin_cls:
                 cls1, cls2 = self.specializer_mixin_cls, specializer_class
                 name = "%s_%s" % (cls1.__name__, cls2.__name__)
@@ -111,7 +123,12 @@ class Context(object):
             final_specializer = self.final_specializer(self, specializer)
             specialized_ast = final_specializer.visit(specialized_ast)
 
-            # specialized_ast.print_tree(self)
+            if print_tree:
+                specialized_ast.print_tree(self)
+
+            if graphviz_outfile is not None:
+                data = self.graphviz(specialized_ast)
+                graphviz_outfile.write(data)
 
             codewriter = self.codewriter_cls(self)
             visitor = self.codegen_cls(self, codewriter)
@@ -157,6 +174,10 @@ class Context(object):
         "Return an LLVM type for the given minitype"
         return self.typemapper.to_llvm(type)
 
+    def graphviz(self, node, graphviz_name="AST"):
+        visitor = self.graphviz_cls(self, graphviz_name)
+        graphviz_graph = visitor.visit(node)
+        return graphviz_graph.to_string()
 
 class CContext(Context):
     "Set defaults for C code generation."
@@ -176,6 +197,7 @@ class ASTBuilder(object):
     # the 'pos' attribute is set for each visit to each node by
     # the ASTMapper
     pos = None
+    temp_reprname_counter = 0
 
     def __init__(self, context):
         """
@@ -479,9 +501,12 @@ class ASTBuilder(object):
         temp = self.temp(type)
         return self.expr(stats=[self.assign(temp, expr)], expr=temp)
 
-    def temp(self, type, name=None, rhs=None):
+    def temp(self, type, name=None):
         "Allocate a temporary of a given type"
-        return TempNode(self.pos, type, name=name or 'temp', rhs=rhs)
+        name = name or 'temp'
+        repr_name = '%s%d' % (name, self.temp_reprname_counter)
+        self.temp_reprname_counter += 1
+        return TempNode(self.pos, type, name=name, repr_name=repr_name)
 
     def constant(self, value, type=None):
         """
@@ -641,7 +666,6 @@ class Node(miniutils.ComparableObjectMixin):
     is_expression = False
 
     is_statlist = False
-    is_scalar = False
     is_constant = False
     is_assignment = False
     is_unop = False
@@ -653,6 +677,7 @@ class Node(miniutils.ComparableObjectMixin):
     is_label = False
     is_temp = False
     is_statement = False
+    is_sizeof = False
 
     is_funcarg = False
     is_array_funcarg = False
@@ -882,7 +907,6 @@ class NodeWrapper(ExprNode):
 
     is_node_wrapper = True
     is_constant_scalar = False
-    is_scalar = False
 
     child_attrs = []
 
@@ -1011,8 +1035,6 @@ class StridePointer(ArrayAttribute):
 
 class TempNode(Variable):
     "A temporary of a certain type"
-
-    child_attrs = ['rhs']
 
     is_temp = True
 
