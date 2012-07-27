@@ -287,8 +287,9 @@ class ArrayType(Type):
         raise Exception("You probably want a pointer type to the dtype")
 
     def to_llvm(self, context):
-        raise Exception("Obtain a pointer to the dtype and convert that "
-                        "to an LLVM type")
+        # raise Exception("Obtain a pointer to the dtype and convert that "
+        #                 "to an LLVM type")
+        return context.to_llvm(self)
 
     def __repr__(self):
         axes = [":"] * self.ndim
