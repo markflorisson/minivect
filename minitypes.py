@@ -221,6 +221,9 @@ class Type(miniutils.ComparableObjectMixin):
         return (type(self) is type(other) and
                 self.comparison_type_list == other.comparison_type_list)
 
+    def __ne__(self, other):
+        return not self == other
+
     def __hash__(self):
         h = hash(type(self))
         for subtype in self.comparison_type_list:
