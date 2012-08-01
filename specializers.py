@@ -918,10 +918,6 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         return ((type.is_c_contig and self.order == "C") or
                 (type.is_f_contig and self.order == "F"))
 
-    def _compute_inner_dim_pointer(self, arg, stats):
-        #if self.matching_contiguity(arg.type):
-        super(StridedSpecializer, self)._compute_inner_dim_pointer(arg, stats)
-
     def _element_location(self, variable):
         """
         Generate a strided or directly indexed load of a single element.
@@ -1100,13 +1096,13 @@ class CTiledStridedSpecializer(
         else:
             self.indices = self.indices + indices
 
-        # Generate temporary pointers for all operands and insert just outside
-        # the innermost loop
-        stats = self.computer_inner_dim_pointers(tiled=True)
-        stats.append(b.pragma_for(inner_loops.body))
-        inner_loops.body = b.stats(*stats)
-
         if strength_reduction:
+            # Generate temporary pointers for all operands and insert just outside
+            # the innermost loop
+            stats = self.computer_inner_dim_pointers(tiled=True)
+            # stats.append(b.pragma_for(inner_loops.body))
+            stats.append(inner_loops.body)
+            inner_loops.body = b.stats(*stats)
             body = self.strength_reduce_inner_dimension(body, innermost_loop)
 
         return self.visit(body)
@@ -1145,8 +1141,18 @@ class CTiledStridedSpecializer(
     def strided_indices(self):
         return self.indices[:-1] + [self.tiled_indices[1]]
 
-    # def _element_location(self, variable):
-    #     return self._strided_element_location(variable)
+    def _element_location(self, variable):
+        """
+        Return data + i * strides[0] + j * strides[1] when we are not using
+        strength reduction. Otherwise generate temp_data += strides[1]. For
+        this to work, temp_data must be set to
+        data + i * strides[0] + outer_j * strides[1]. This happens through
+        _compute_inner_dim_pointers with tiled=True.
+        """
+        if strength_reduction:
+            return super(CTiledStridedSpecializer, self)._element_location(variable)
+        else:
+            return self._strided_element_location(variable)
 
 class FTiledStridedSpecializer(StridedFortranSpecializer,
                                #StrengthReducingStridedFortranSpecializer,
