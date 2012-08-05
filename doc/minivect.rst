@@ -17,6 +17,13 @@ minivect Package
     :members:
     :show-inheritance:
 
+:mod:`optimize` Module
+--------------------------
+
+.. automodule:: minivect.optimize
+    :members:
+    :show-inheritance:
+
 :mod:`minitypes` Module
 -----------------------
 

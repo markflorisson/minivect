@@ -9,6 +9,7 @@ For auto-tuning code for tile size and OpenMP size, see
 https://github.com/markflorisson88/cython/blob/_array_expressions/Cython/Utility/Vector.pyx
 """
 
+import sys
 import copy
 import functools
 
@@ -17,6 +18,9 @@ import miniutils
 import minitypes
 
 strength_reduction = True
+
+def debug(*args):
+    sys.stderr.write(" ".join(str(arg) for arg in args) + '\n')
 
 def specialize_ast(ast):
     return copy.deepcopy(ast)
@@ -100,6 +104,8 @@ class Specializer(BaseSpecializer):
     is_contig_specializer = False
     is_tiled_specializer = False
     is_vectorizing_specializer = False
+    is_inner_contig_specializer = False
+    is_strided_specializer = False
 
     vectorized_equivalents = None
 
@@ -170,6 +176,10 @@ class Specializer(BaseSpecializer):
         node.body = b.stats(node.body, b.return_(node.success_value))
 
         self.visitchildren(node)
+
+#        if not self.is_contig_specializer:
+#            self.compute_temp_strides(b, node)
+
         return node
 
     def visit_ForNode(self, node):
@@ -183,7 +193,7 @@ class Specializer(BaseSpecializer):
             self.variables[node.name] = node
         return self.visit_Node(node)
 
-    def get_data_pointer(self, variable):
+    def get_data_pointer(self, variable, loop_level):
         return self.function.args[variable.name].data_pointer
 
     def omp_for(self, node):
@@ -207,14 +217,261 @@ class FinalSpecializer(BaseSpecializer):
     """
 
     vectorized_equivalents = None
+    in_lhs_expr = False
 
     def __init__(self, context, previous_specializer):
         super(FinalSpecializer, self).__init__(context)
-        self.previous_specialer = previous_specializer
+        self.previous_specializer = previous_specializer
+        self.sp = previous_specializer
+
         self.error_handlers = []
+        self.loop_level = 0
+
+        self.variables = {}
+        self.strides = {}
+        self.outer_pointers = {}
+        self.vector_temps = {}
+
+        self.indices = self.sp.indices
+
+    def run_optimizations(self, node):
+        import optimize
+
+        #if not self.previous_specializer.is_contig_specializer:
+            #optimizer = optimize.HoistBroadcastingExpressions(self.context)
+            #node = optimizer.visit(node)
+
+        return node
+
+    def visit_Variable(self, node):
+        """
+        Process variables. For arrays, this means retrieving the element
+        from the array through a call to self._element_location().
+        """
+        if node.type.is_array:
+            tiled = self.sp.is_tiled_specializer
+            inner_contig = (
+                self.sp.is_inner_contig_specializer and
+                self.loop_level == self.function.ndim and
+                (not self.sp.is_strided_specializer or
+                 self.sp.matching_contiguity(node.type)))
+
+            contig = self.sp.is_contig_specializer
+
+            arg_data_pointer = self.function.args[node.name].data_pointer
+            if self.sp.is_contig_specializer:
+                data_pointer = arg_data_pointer
+            else:
+                self.compute_temp_strides(node, inner_contig, tiled=tiled)
+                data_pointer = self.compute_data_pointer(
+                            node, arg_data_pointer, inner_contig, tiled)
+
+            for_node = self.function.for_loops[self.loop_level - 1]
+
+            if (self.sp.is_vectorizing_specializer and
+                    self.sp.should_vectorize):
+                return self.handle_vector_variable(
+                        data_pointer, for_node)
+            else:
+                element = self.element_location(data_pointer, for_node,
+                                                inner_contig, contig,
+                                                tiled=tiled)
+                return self.astbuilder.resolved_variable(
+                                node.name, node.type, element)
+        else:
+            return node
+
+    def element_location(self, data_pointer, for_node,
+                         inner_contig, is_contig, tiled):
+        if inner_contig or is_contig:
+            # contiguous access
+            return self.astbuilder.index(data_pointer, for_node.index)
+        else:
+            # strided access
+            return self.astbuilder.dereference(data_pointer)
+
+    def handle_vector_variable(self, data_pointer, for_node):
+        b = self.astbuilder
+
+        # For array operands, load reads into registers, and store
+        # writes back into the data pointer. For assignment to a register
+        # we use a vector type, for assignment to a data pointer, the
+        # data pointer type
+        if self.in_lhs_expr:
+            return data_pointer
+        else:
+            variable = b.vector_variable(data_pointer, self.sp.vector_size)
+            if variable in self.vector_temps:
+                return self.vector_temps[variable]
+
+            rhs = b.vector_load(variable, self.sp.vector_size)
+            temp = b.temp(variable.type, 'xmm')
+            self.vector_temps[variable] = temp
+            for_node.prepending_stats.append(b.assign(temp, rhs))
+            return self.visit(temp)
+
+    def compute_temp_strides(self, variable, handle_inner_dim, tiled=False):
+        b = self.astbuilder
+
+        if variable in self.strides:
+            return self.strides[variable]
+
+        start = 0
+        stop = variable.type.ndim
+        if handle_inner_dim:
+            if self.sp.order == "F":
+                start = 1
+            else:
+                stop = stop - 1
+
+        self.strides[variable] = strides = [None] * len(self.function.for_loops)
+
+        for dim in range(start, stop):
+            stride = b.stride(variable, dim)
+            temp_stride = b.temp(stride.type.qualify("const"),
+                                 name="%s_stride%d" % (variable.name, dim))
+
+            stat = b.assign(temp_stride,
+                            b.div(stride, b.sizeof(variable.type.dtype)))
+            self.function.prepending_stats.append(stat)
+            strides[dim] = temp_stride
+
+        return strides
+
+    def compute_data_pointer(self, variable, argument_data_pointer,
+                             handle_inner_dim, tiled):
+        b = self.astbuilder
+
+        assert variable.type.is_array
+        pointer_type = argument_data_pointer.type.unqualify("const")
+        loop_level = self.loop_level
+
+        offset = self.function.ndim - variable.type.ndim
+        stop = loop_level - handle_inner_dim
+        if self.outer_pointers.get(variable):
+            start = len(self.outer_pointers[variable])
+            if stop <= start:
+                return self.outer_pointers[variable][stop - 1]
+        else:
+            self.outer_pointers[variable] = []
+            start = offset
+
+        outer_pointers = self.outer_pointers[variable]
+        temp = argument_data_pointer
+        for_loops = self.function.for_loops[start:stop]
+
+        for i, for_node in zip(range(start, stop), for_loops):
+            if for_node.dim < offset:
+                continue
+
+            temp = b.temp(pointer_type)
+            dim = for_node.dim - offset
+
+            if not outer_pointers: #i == offset:
+                outer_node = self.function
+                outer_pointer = self.function.args[variable.name].data_pointer
+            else:
+                outer_node = self.function.for_loops[i - 1]
+                outer_pointer = outer_pointers[-1]
+
+            outer_node.prepending_stats.append(b.assign(temp, outer_pointer))
+
+            stride = self.strides[variable][dim]
+            assert stride is not None, ('strides', self.strides[variable],
+                                        'dim', dim, 'start', start,
+                                        'stop', stop, 'offset', offset,
+                                        'specializer', self.sp)
+
+            if for_node.is_controlling_loop:
+                expr = b.add(temp, b.mul(stride, for_node.blocksize))
+            else:
+                expr = b.add(temp, stride)
+
+            for_node.appending_stats.append(b.assign(temp, expr))
+
+            self.outer_pointers[variable].append(temp)
+
+        return temp
+
+    def _compute_inner_dim_pointer(self, b, p, outer_pointer, loop_level,
+                                   variable, tiled):
+        """
+        Compute the pointer to each 'row'.
+
+        In the case of Fortran, offset strides by one, since we want all
+        strides but the first.
+        In the case of C, we want all strides except the last.
+
+        (indices is already offset through the strided_indices()
+        method)
+
+        arg: the array function argument
+        stats: list of statements we append to
+        """
+        b = self.astbuilder
+
+        indices = self.indices
+        if tiled:
+            # use all indices
+            ndim = variable.type.ndim
+            strides_offset = 0
+
+            if loop_level == len(self.function.for_loops):
+                indices = [self.index(loop_level - 2),
+                           self.function.lower_tiling_limits[1]]
+            else:
+                indices = [self.index(loop_level - 1)]
+        else:
+            ndim = variable.type.ndim - 1
+            strides_offset = self.order == 'F'
+            indices = [self.index(loop_level - 1)]
+
+        first_element_pointer = self._strided_element_location(
+            variable, indices=indices,
+            strides_index_offset=strides_offset,
+            ndim=ndim, pointer=p)
+
+        return b.assign(p, first_element_pointer.operand)
 
     def visit_FunctionNode(self, node):
         self.function = node
+        node = self.run_optimizations(node)
+        node.prepending_stats = []
+        self.visitchildren(node)
+
+        node.prepending_stats.append(node.body)
+        node.body = self.astbuilder.stats(*node.prepending_stats)
+
+        return node
+
+    def visit_ForNode(self, node):
+        is_nd_fornode = node in self.function.for_loops
+        self.loop_level += is_nd_fornode
+
+        # Allow modifications while visiting some descendant of this node
+        # This happens especially while variables are resolved, which
+        # calls compute_inner_dim_pointer().
+        node.prepending_stats = []
+        node.appending_stats = []
+
+        self.visitchildren(node)
+
+        node.prepending_stats.append(node.body)
+        node.prepending_stats.extend(node.appending_stats)
+        node.body = self.astbuilder.stats(*node.prepending_stats)
+
+        self.loop_level -= is_nd_fornode
+        return node
+
+    def visit_AssignmentExpr(self, node):
+        # assignment expressions should not be nested
+        self.in_lhs_expr = True
+        node.lhs = self.visit(node.lhs)
+        self.in_lhs_expr = False
+        node.rhs = self.visit(node.rhs)
+        return node
+
+    def visit_TempNode(self, node):
         self.visitchildren(node)
         return node
 
@@ -307,7 +564,7 @@ class FinalSpecializer(BaseSpecializer):
         return node
 
     def visit_PragmaForLoopNode(self, node):
-        if self.previous_specialer.is_vectorizing_specializer:
+        if self.previous_specializer.is_vectorizing_specializer:
             node = node.for_node
 
         self.visitchildren(node)
@@ -380,25 +637,17 @@ class OrderedSpecializer(Specializer):
             loop_order = self.loop_order(self.order)
 
         indices = []
-        # print range(*self.loop_order(self.order))
+        for_loops = []
         for i in range(*loop_order):
             node = b.for_range_upwards(node, lower=lower(i), upper=upper(i),
                                        step=step)
+            node.dim = i
+            for_loops.append(node)
             indices.append(node.target)
 
         self.order_indices(indices)
         result_indices.extend(indices)
-        return node
-
-    def visit_Variable(self, node):
-        """
-        Process variables. For arrays, this means retrieving the element
-        from the array through a call to self._element_location().
-        """
-        if node.name in self.function.args and node.type.is_array:
-            return self._element_location(node)
-
-        return super(OrderedSpecializer, self).visit_Variable(node)
+        return for_loops[::-1], node
 
     def _index_pointer(self, pointer, indices, strides):
         """
@@ -411,7 +660,7 @@ class OrderedSpecializer(Specializer):
             dest_pointer_type=pointer.type)
 
     def _strided_element_location(self, node, indices=None, strides_index_offset=0,
-                                  ndim=None):
+                                  ndim=None, pointer=None):
         """
         Like _index_pointer, but given only an array operand indices. It first
         needs to get the data pointer and stride nodes.
@@ -420,13 +669,16 @@ class OrderedSpecializer(Specializer):
         b = self.astbuilder
         if ndim is None:
             ndim = node.type.ndim
+        if pointer is None:
+            pointer = b.data_pointer(node)
 
         indices = [index for index in indices[len(indices) - ndim:]]
         strides = [b.stride(node, i + strides_index_offset)
-                       for i, idx in enumerate(indices)]
-        node = self._index_pointer(b.data_pointer(node), indices, strides)
+                   for i, idx in enumerate(indices)]
+        node = self._index_pointer(pointer, indices, strides)
         self.visitchildren(node)
         return node
+
 
 def get_any_array_argument(arguments):
     for arg in arguments:
@@ -498,7 +750,6 @@ class VectorizingSpecializer(Specializer):
 
     is_vectorizing_specializer = True
 
-    in_lhs_expr = False
     can_vectorize_visitor = CanVectorizeVisitor
     vectorized_equivalents = None
 
@@ -526,42 +777,6 @@ class VectorizingSpecializer(Specializer):
     def visit_FunctionNode(self, node):
         self.dtype = get_any_array_argument(node.arguments).type.dtype
         return super(VectorizingSpecializer, self).visit_FunctionNode(node)
-
-    @visit_if_should_vectorize
-    def visit_AssignmentExpr(self, node):
-        # assignment expressions should not be nested
-        self.in_lhs_expr = True
-        node.lhs = self.visit(node.lhs)
-        self.in_lhs_expr = False
-        node.rhs = self.visit(node.rhs)
-        return node
-
-    @visit_if_should_vectorize
-    def visit_Variable(self, variable):
-        b = self.astbuilder
-
-        if variable.type.is_array:
-            # For array operands, load reads into registers, and store
-            # writes back into the data pointer. For assignment to a register
-            # we use a vector type, for assignment to a data pointer, the
-            # data pointer type
-            data_pointer = self.get_data_pointer(variable)
-#            data_pointer = b.data_pointer(self.function.args[variable.name])
-            data_pointer = b.add(data_pointer, self.contig_index())
-            if self.in_lhs_expr:
-                return data_pointer
-            else:
-                variable = b.vector_variable(data_pointer, self.vector_size)
-                if variable in self.temps:
-                    return self.temps[variable]
-
-                rhs = b.vector_load(variable, self.vector_size)
-                temp = b.temp(variable.type, 'xmm')
-                self.temps[variable] = temp
-                self.assignments.append(b.assign(temp, rhs))
-                return self.visit(temp)
-        else:
-            return super(VectorizingSpecializer, self).visit_Variable(variable)
 
     @visit_if_should_vectorize
     def visit_BinopNode(self, node):
@@ -655,71 +870,15 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
     specialization_name = "inner_contig_c"
     order = "C"
 
+    is_inner_contig_specializer = True
     vectorized_equivalents = None
 
     def __init__(self, context, specialization_name=None):
-        super(StridedCInnerContigSpecializer, self).__init__(context,
-                                                             specialization_name)
+        super(StridedCInnerContigSpecializer, self).__init__(
+                                    context, specialization_name)
         self.indices = []
         self.pointers = {}
-
-    def _compute_inner_dim_pointer(self, arg, stats, tiled):
-        """
-        Compute the pointer to each 'row'.
-
-        In the case of Fortran, offset strides by one, since we want all
-        strides but the first.
-        In the case of C, we want all strides except the last.
-
-        (indices is already offset through the strided_indices()
-        method)
-
-        arg: the array function argument
-        stats: list of statements we append to
-        """
-        b = self.astbuilder
-
-        dest_pointer_type = arg.data_pointer.type.unqualify('const')
-        pointer = b.temp(dest_pointer_type)
-
-        indices = self.strided_indices()
-        if tiled:
-            # use all indices
-            ndim = arg.type.ndim
-            strides_offset = 0
-            assert len(indices) == ndim, (indices, ndim)
-            #indices = self.indices
-        else:
-            ndim = arg.type.ndim - 1
-            strides_offset = self.order == 'F'
-            #indices = self.strided_indices()
-
-        first_element_pointer = self._strided_element_location(
-                    arg, indices=indices, strides_index_offset=strides_offset,
-                    ndim=ndim)
-
-        stats.append(b.assign(pointer, first_element_pointer.operand))
-        self.pointers[arg.variable] = pointer
-
-    def computer_inner_dim_pointers(self, tiled=False):
-        """
-        Return a list of statements for temporary pointers we can directly
-        index or add the final stride to.
-        """
-        b = self.astbuilder
-        stats = []
-        for arg in self.function.arguments:
-            if arg.is_array_funcarg:
-                if arg.type.ndim >= 2:
-                    self._compute_inner_dim_pointer(arg, stats, tiled)
-                else:
-                    # Note: we have to allocate a temp, since the pointer is
-                    #       going to be modified!
-                    temp = b.temp(arg.data_pointer.type.unqualify("const"))
-                    stats.append(b.assign(temp, arg.data_pointer))
-                    self.pointers[arg.variable] = temp
-
-        return stats
+        self.outer_pointers = {}
 
     def _generate_inner_loop(self, b, node, stats):
         """
@@ -764,16 +923,24 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         original_expr = specialize_ast(node.body)
 
         # start by generating a C or Fortran ordered loop
-        node = self.ordered_loop(node.body, self.indices)
+        self.function.for_loops, node = self.ordered_loop(node.body,
+                                                          self.indices)
         # Create assignments for temporary pointers just outside the innermost
         # loop
-        stats = self.computer_inner_dim_pointers()
+        #stats = self.compute_inner_dim_pointers()
+        stats = []
         # Inject the pointers in the inner loop
         loop, node = self._generate_inner_loop(b, node, stats)
         result = self.visit(node)
         node = self._vectorize_inner_loop(b, loop, node, original_expr)
 
         return result
+
+    def index(self, loop_level):
+        if self.order == 'C':
+            return self.indices[loop_level]
+        else:
+            return self.indices[-loop_level]
 
     def strided_indices(self):
         "Return the list of strided indices for this order"
@@ -783,12 +950,9 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         "The contiguous index"
         return self.indices[-1]
 
-    def get_data_pointer(self, variable):
-        return self.pointers[variable]
+    def get_data_pointer(self, variable, loop_level):
+        return self.compute_inner_dim_pointer(variable, loop_level)
 
-    def _element_location(self, variable):
-        data_pointer = self.pointers[variable]
-        return self.astbuilder.index(data_pointer, self.contig_index())
 
 class StridedFortranInnerContigSpecializer(StridedCInnerContigSpecializer):
     """
@@ -819,6 +983,7 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
     specialization_name = "strength_reduced_strided"
     order = "C"
 
+    is_strided_specializer = True
     vectorized_equivalents = None
 
     def matching_contiguity(self, type):
@@ -832,8 +997,8 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
     def visit_NDIterate(self, node):
         b = self.astbuilder
         outer_loop = super(StridedSpecializer, self).visit_NDIterate(node)
-        outer_loop = self.strength_reduce_inner_dimension(outer_loop,
-                                                          self.inner_loop)
+        # outer_loop = self.strength_reduce_inner_dimension(outer_loop,
+        #                                                   self.inner_loop)
         return outer_loop
 
     def strength_reduce_inner_dimension(self, outer_loop, inner_loop):
@@ -873,18 +1038,6 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
         outer_stats.append(outer_loop)
         return b.stats(*outer_stats)
 
-    def _element_location(self, variable):
-        """
-        Generate a strided or directly indexed load of a single element.
-        """
-        if self.matching_contiguity(variable.type):
-            # Generate a direct index in the pointer
-            sup = super(StrengthReducingStridedSpecializer, self)
-            return sup._element_location(variable)
-
-        # strided access through temporary pointer
-        return self.astbuilder.dereference(self.pointers[variable])
-
 class StrengthReducingStridedFortranSpecializer(
     StridedFortranInnerContigSpecializer, StrengthReducingStridedSpecializer):
     """
@@ -909,6 +1062,7 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
     order = "C"
 
     vectorized_equivalents = None
+    is_strided_specializer = True
 
     def matching_contiguity(self, type):
         """
@@ -918,16 +1072,17 @@ class StridedSpecializer(StridedCInnerContigSpecializer):
         return ((type.is_c_contig and self.order == "C") or
                 (type.is_f_contig and self.order == "F"))
 
-    def _element_location(self, variable):
+    def _element_location(self, variable, loop_level):
         """
         Generate a strided or directly indexed load of a single element.
         """
         #if variable in self.pointers:
         if self.matching_contiguity(variable.type):
-            return super(StridedSpecializer, self)._element_location(variable)
+            return super(StridedSpecializer, self)._element_location(variable,
+                                                                     loop_level)
 
         b = self.astbuilder
-        pointer = self.pointers[variable]
+        pointer = self.get_data_pointer(variable, loop_level)
         indices = [self.contig_index()]
 
         if self.order == "C":
@@ -972,6 +1127,9 @@ class ContigSpecializer(OrderedSpecializer):
 
         for_node = b.for_range_upwards(node.body,
                                        upper=self.function.total_shape)
+        self.function.for_loops = [for_node]
+        self.indices = [for_node.index]
+
         node = self.omp_for(b.pragma_for(for_node))
         self.target = for_node.target
         node = self.visit(node)
@@ -985,18 +1143,19 @@ class ContigSpecializer(OrderedSpecializer):
     def visit_StridePointer(self, node):
         return None
 
-    def _element_location(self, node):
+    def _element_location(self, node, loop_level):
         "Directly index the data pointer"
         data_pointer = self.astbuilder.data_pointer(node)
         return self.astbuilder.index(data_pointer, self.target)
+
+    def index(self, loop_level):
+        return self.target
 
     def contig_index(self):
         return self.target
 
 
-class CTiledStridedSpecializer(
-    #StrengthReducingStridedSpecializer):
-    StridedSpecializer):
+class CTiledStridedSpecializer(StridedSpecializer):
     """
     Generate tiled code for the last two (C) or first two (F) dimensions.
     The blocksize may be overridden through the get_blocksize method, in
@@ -1038,9 +1197,9 @@ class CTiledStridedSpecializer(
 
         # Generate the two outer tiling loops
         tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
-        body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
-                                 step=self.blocksize,
-                                 loop_order=self.tiled_order())
+        controlling_loops, body = self.ordered_loop(
+                tiled_loop_body, self.tiled_indices, step=self.blocksize,
+                loop_order=self.tiled_order())
         del tiled_loop_body.stats[:]
 
         # Generate some temporaries to store the upper limit of the inner
@@ -1072,7 +1231,7 @@ class CTiledStridedSpecializer(
         outer_for_node = node.body
         inner_body = node.body
 
-        inner_loops = self.ordered_loop(
+        tiling_loops, inner_loops = self.ordered_loop(
             node.body, self.indices,
             lower=lower, upper=upper,
             loop_order=self.tiled_order())
@@ -1083,8 +1242,8 @@ class CTiledStridedSpecializer(
         # Generate the outer loops (in case the array operands have more than
         # two dimensions)
         indices = []
-        body = self.ordered_loop(body, indices,
-                                 loop_order=self.untiled_order())
+        outer_loops, body = self.ordered_loop(body, indices,
+                                              loop_order=self.untiled_order())
 
         body = self.omp_for(body)
         # At this point, 'self.indices' are the indices of the tiled loop
@@ -1096,16 +1255,37 @@ class CTiledStridedSpecializer(
         else:
             self.indices = self.indices + indices
 
-        if strength_reduction:
-            # Generate temporary pointers for all operands and insert just outside
-            # the innermost loop
-            stats = self.computer_inner_dim_pointers(tiled=True)
-            # stats.append(b.pragma_for(inner_loops.body))
-            stats.append(inner_loops.body)
-            inner_loops.body = b.stats(*stats)
-            body = self.strength_reduce_inner_dimension(body, innermost_loop)
+        # if strength_reduction:
+        #     body = self.strength_reduce_inner_dimension(body, innermost_loop)
+
+        for dim, for_node in enumerate(controlling_loops):
+            for_node.is_controlling_loop = True
+            for_node.blocksize = self.blocksize
+
+        for dim, for_node in enumerate(tiling_loops):
+            for_node.is_tiling_loop = True
+
+        self.set_dims(controlling_loops)
+        self.set_dims(tiling_loops)
+
+        self.function.controlling_loops = controlling_loops
+        self.function.tiling_loops = tiling_loops
+        self.function.outer_loops = outer_loops
+        self.function.for_loops = outer_loops + controlling_loops + tiling_loops
+
+        self.function.lower_tiling_limits = tiled_indices
+        self.function.upper_tiling_limits = upper_limits
 
         return self.visit(body)
+
+    def set_dims(self, tiled_loops):
+        "Set the 'dim' attributes of the tiling and controlling loops"
+        # We need to reverse our tiled order, since this order is used to
+        # build up the for nodes in reverse. We have an ordered list of for
+        # nodes.
+        tiled_order = reversed(range(*self.tiled_order()))
+        for dim, for_node in zip(tiled_order, tiled_loops):
+            for_node.dim = dim
 
     def _tile_in_all_dimensions(self, node):
         """
@@ -1118,8 +1298,9 @@ class CTiledStridedSpecializer(
         self.blocksize = self.get_blocksize()
 
         tiled_loop_body = b.stats(b.constant(0)) # fake empty loop body
-        body = self.ordered_loop(tiled_loop_body, self.tiled_indices,
-                                 step=self.blocksize)
+        controlling_loops, body = self.ordered_loop(tiled_loop_body,
+                                                     self.tiled_indices,
+                                                     step=self.blocksize)
         body = self.omp_for(body)
         del tiled_loop_body.stats[:]
 
@@ -1132,16 +1313,23 @@ class CTiledStridedSpecializer(
                                             b.shape_index(i, self.function))))
             upper_limits.append(upper_limit)
 
-        tiled_loop_body.stats.append(self.ordered_loop(
+        tiling_loops, inner_body = self.ordered_loop(
             node.body, self.indices,
             lower=lambda i: self.tiled_indices[i],
-            upper=lambda i: upper_limits[i]))
+            upper=lambda i: upper_limits[i])
+        tiled_loop_body.stats.append(inner_body)
+
+        self.function.controlling_loops = controlling_loops
+        self.function.tiling_loops = tiling_loops
+        self.function.outer_loops = []
+        self.function.for_loops = tiling_loops
+
         return self.visit(body)
 
     def strided_indices(self):
         return self.indices[:-1] + [self.tiled_indices[1]]
 
-    def _element_location(self, variable):
+    def _element_location(self, variable, loop_level):
         """
         Return data + i * strides[0] + j * strides[1] when we are not using
         strength reduction. Otherwise generate temp_data += strides[1]. For
@@ -1150,9 +1338,13 @@ class CTiledStridedSpecializer(
         _compute_inner_dim_pointers with tiled=True.
         """
         if strength_reduction:
-            return super(CTiledStridedSpecializer, self)._element_location(variable)
+            return super(CTiledStridedSpecializer, self)._element_location(
+                                                        variable, loop_level)
         else:
             return self._strided_element_location(variable)
+
+    def get_data_pointer(self, variable, loop_level):
+        return self.compute_inner_dim_pointer(variable, loop_level, tiled=True)
 
 class FTiledStridedSpecializer(StridedFortranSpecializer,
                                #StrengthReducingStridedFortranSpecializer,

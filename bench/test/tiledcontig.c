@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <omp.h>
 
-#define N 2048
+#define N 1600
 
 static void
 transpose(float *const restrict arg1, const float *const restrict arg2, const int blocksize)
@@ -121,20 +121,22 @@ int main(void) {
     double t;
 
     init(c, d);
+    simple_transpose(c, d, 64);
+    verify(c);
+
     t = omp_get_wtime();
     for (i = 0; i < 500; i++)
-        simple_transpose(c, d, 128);
-    printf("%lf\n", omp_get_wtime() - t);
-    //verify(c);
-
-    puts(".........");
+        simple_transpose(c, d, 64);
+    printf("normal: %lf\n", omp_get_wtime() - t);
 
     init(a, b);
+    transpose(a, b, 64);
+    verify(a);
+
     t = omp_get_wtime();
     for (i = 0; i < 500; i++)
-        transpose(a, b, 128);
-    printf("%lf\n", omp_get_wtime() - t);
-    //verify(a);
+        transpose(a, b, 64);
+    printf("sse: %lf\n", omp_get_wtime() - t);
 
     return 0;
 }

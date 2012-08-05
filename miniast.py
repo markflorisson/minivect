@@ -23,6 +23,10 @@ class UndocClassAttribute(object):
     def __call__(self, *args, **kwargs):
         return self.cls(*args, **kwargs)
 
+def make_cls(cls1, cls2):
+    name = "%s_%s" % (cls1.__name__, cls2.__name__)
+    return type(name, (cls1, cls2), {})
+
 class Context(object):
     """
     A context that knows how to map ASTs back and forth, how to wrap nodes
@@ -88,7 +92,9 @@ class Context(object):
     graphviz_cls = UndocClassAttribute(graphviz.GraphvizGenerator)
 
     specializer_mixin_cls = None
-    final_specializer = UndocClassAttribute(specializers.FinalSpecializer)
+    variable_resolving_mixin_cls = None
+
+    final_specializer = specializers.FinalSpecializer
 
     def __init__(self):
         self.init()
@@ -112,15 +118,25 @@ class Context(object):
         """
         for specializer_class in specializer_classes:
             self.init()
+
+            # add specializer mixin and run specializer
             if self.specializer_mixin_cls:
-                cls1, cls2 = self.specializer_mixin_cls, specializer_class
-                name = "%s_%s" % (cls1.__name__, cls2.__name__)
-                specializer_class = type(name, (cls1, cls2), {})
+                specializer_class = make_cls(self.specializer_mixin_cls,
+                                             specializer_class)
 
             specializer = specializer_class(self)
             specialized_ast = specializer.visit(
                                     specializers.specialize_ast(ast))
-            final_specializer = self.final_specializer(self, specializer)
+
+            # Add variable resolving mixin to the final specializer and run
+            # transform
+            final_specializer_cls = self.final_specializer
+            if self.variable_resolving_mixin_cls:
+                final_specializer_cls = make_cls(
+                        self.variable_resolving_mixin_cls,
+                        final_specializer_cls)
+
+            final_specializer = final_specializer_cls(self, specializer)
             specialized_ast = final_specializer.visit(specialized_ast)
 
             if print_tree:
@@ -131,8 +147,9 @@ class Context(object):
                 graphviz_outfile.write(data)
 
             codewriter = self.codewriter_cls(self)
-            visitor = self.codegen_cls(self, codewriter)
-            visitor.visit(specialized_ast)
+            codegen = self.codegen_cls(self, codewriter)
+            codegen.visit(specialized_ast)
+
             yield (specializer, specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
 
@@ -216,7 +233,8 @@ class ASTBuilder(object):
         else:
             raise minierror.InferTypeError()
 
-    def function(self, name, body, args, shapevar=None, posinfo=None):
+    def function(self, name, body, args, shapevar=None, posinfo=None,
+                 omp_size=None):
         """
         Create a new function.
 
@@ -235,8 +253,7 @@ class ASTBuilder(object):
                         arguments to the function ``(filename, lineno, column)``.
         """
         if shapevar is None:
-            shapevar = self.variable(minitypes.Py_ssize_t.pointer(),
-                                     '__pyx_shape')
+            shapevar = self.variable(minitypes.Py_ssize_t.pointer(), 'shape')
 
         arguments, scalar_arguments = [], []
         for arg in args:
@@ -252,7 +269,8 @@ class ASTBuilder(object):
         return FunctionNode(self.pos, name, body, arguments, scalar_arguments,
                             shapevar, posinfo,
                             error_value=self.constant(-1),
-                            success_value=self.constant(0))
+                            success_value=self.constant(0),
+                            omp_size=omp_size or self.constant(1024))
 
     def funcarg(self, variable, *variables, **kwargs):
         """
@@ -310,7 +328,7 @@ class ASTBuilder(object):
         """
         return NDIterate(self.pos, body)
 
-    def for_(self, body, init, condition, step, is_tiled=False):
+    def for_(self, body, init, condition, step):
         """
         Create a for loop node.
 
@@ -319,7 +337,7 @@ class ASTBuilder(object):
         :param condition: boolean loop condition
         :param step: step clause (assignment expression)
         """
-        return ForNode(self.pos, init, condition, step, body, is_tiled)
+        return ForNode(self.pos, init, condition, step, body)
 
     def for_range_upwards(self, body, upper, lower=None, step=None):
         """
@@ -525,6 +543,19 @@ class ASTBuilder(object):
         """
         return Variable(self.pos, type, name)
 
+    def resolved_variable(self, array_type, name, element):
+        """
+        Creates a node that keeps the array operand information such as the
+        original array type, but references an actual element in the array.
+
+        :param type: original array type
+        :param name: original array's name
+        :param element: arbitrary expression that resolves some element in the
+                        array
+        """
+        return ResolvedVariable(self.pos, element.type, name,
+                                element=element, array_type=array_type)
+
     def cast(self, node, dest_type):
         "Cast node to the given destination type"
         return CastNode(self.pos, dest_type, node)
@@ -678,6 +709,7 @@ class Node(miniutils.ComparableObjectMixin):
     is_temp = False
     is_statement = False
     is_sizeof = False
+    is_variable = False
 
     is_funcarg = False
     is_array_funcarg = False
@@ -743,25 +775,35 @@ class FunctionNode(Node):
     exceptions and success respectively.
 
     .. attribute:: shape
-            the broadcast shape for all operands
+
+        the broadcast shape for all operands
 
     .. attribute:: ndim
-            the ndim of the total broadcast' shape
+
+        the ndim of the total broadcast' shape
 
     .. attribute:: arguments
-            all array arguments
+
+        all array arguments
 
     .. attribute:: scalar arguments
+
         all non-array arguments
 
     .. attribute:: posinfo
+
         the position variables we can write to in case of an exception
+
+    .. attribute:: omp_size
+
+        the threshold of minimum data size needed before starting a parallel
+        section. May be overridden at any time before specialization time.
     """
 
     child_attrs = ['body', 'arguments', 'scalar_arguments']
 
     def __init__(self, pos, name, body, arguments, scalar_arguments,
-                 shape, posinfo, error_value, success_value):
+                 shape, posinfo, error_value, success_value, omp_size):
         super(FunctionNode, self).__init__(pos)
         self.name = name
         self.body = body
@@ -771,6 +813,7 @@ class FunctionNode(Node):
         self.posinfo = posinfo
         self.error_value = error_value
         self.success_value = success_value
+        self.omp_size = omp_size
 
         self.args = dict((v.name, v) for v in arguments)
         self.ndim = max(arg.type.ndim for arg in arguments
@@ -867,13 +910,23 @@ class ForNode(Node):
 
     child_attrs = ['init', 'condition', 'step', 'body']
 
-    def __init__(self, pos, init, condition, step, body, is_tiled=False):
+    is_controlling_loop = False
+    is_tiling_loop = False
+
+    def __init__(self, pos, init, condition, step, body):
         super(ForNode, self).__init__(pos)
         self.init = init
         self.condition = condition
         self.step = step
         self.body = body
-        self.is_tiled = False
+
+        self.index = init.lhs
+
+        # insertions of statements that happen during specialization somewhere
+        # down in the tree. Prepending statements are inserted before the loop
+        # body, appending ones after
+        self.prepending_stats = []
+        self.appending_stats = []
 
 class IfNode(Node):
     "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_"
@@ -1009,10 +1062,17 @@ class Variable(ExprNode):
         self.name = name
 
     def __eq__(self, other):
-        return self.name == other.name
+        return isinstance(other, Variable) and self.name == other.name
 
     def __hash__(self):
         return hash(self.name)
+
+class ResolvedVariable(Variable):
+    child_attrs = ['element']
+
+    def __eq__(self, other):
+        return (isinstance(other, ResolvedVariable) and
+                self.element == other.element)
 
 class ArrayAttribute(Variable):
     "Denotes an attribute of array operands, e.g. the data or stride pointers"

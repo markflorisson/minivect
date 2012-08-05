@@ -83,6 +83,7 @@ class CCodeGen(CodeGen):
     def __init__(self, context, codewriter):
         super(CCodeGen, self).__init__(context, codewriter)
         self.declared_temps = set()
+        self.temp_names = set()
 
     def strip(self, expr_string):
         if expr_string and expr_string[0] == '(' and expr_string[-1] == ')':
@@ -177,16 +178,14 @@ class CCodeGen(CodeGen):
         exprs = self.results(node.init, node.condition, node.step)
         code.putln("for (%s; %s; %s) {" % tuple(self.strip(e) for e in exprs))
 
-        if not node.is_tiled:
-            self.code.declaration_levels.append(code.insertion_point())
-            self.code.loop_levels.append(code.insertion_point())
+        self.code.declaration_levels.append(code.insertion_point())
+        self.code.loop_levels.append(code.insertion_point())
 
         self.visit(node.init)
         self.visit(node.body)
 
-        if not node.is_tiled:
-            self.code.declaration_levels.pop()
-            self.code.loop_levels.pop()
+        self.code.declaration_levels.pop()
+        self.code.loop_levels.pop()
 
         code.putln("}")
 
@@ -220,10 +219,17 @@ class CCodeGen(CodeGen):
     def visit_UnopNode(self, node):
         return "(%s%s)" % (node.operator, self.visit(node.operand))
 
-    def _declare_temp(self, node, rhs_result=None):
-        node.name = "%s%d" % (self.code.mangle(node.name),
-                              len(self.declared_temps))
+    def _mangle_temp(self, node):
+        name = self.code.mangle(node.name)
+        if name in self.temp_names:
+            name = "%s%d" % (name, len(self.declared_temps))
+        node.name = name
+        self.temp_names.add(name)
         self.declared_temps.add(node)
+
+    def _declare_temp(self, node, rhs_result=None):
+        if node not in self.declared_temps:
+            self._mangle_temp(node)
         code = self.code.declaration_levels[-1]
         if rhs_result:
             assignment = " = %s" % (rhs_result,)
@@ -248,6 +254,7 @@ class CCodeGen(CodeGen):
                                     self.visit(node.rhs.rhs))
         elif (node.is_statement and node.lhs.is_temp and
                   node.lhs not in self.declared_temps):
+            self._mangle_temp(node.lhs)
             self._declare_temp(node.lhs, self.visit(node.rhs))
         else:
             return "(%s = %s)" % self.results(node.lhs, node.rhs)
@@ -277,6 +284,9 @@ class CCodeGen(CodeGen):
         if not node.mangled_name:
             node.mangled_name = self.code.mangle(node.name)
         return node.mangled_name
+
+    def visit_ResolvedVariable(self, node):
+        return self.visit(node.element)
 
     def visit_JumpNode(self, node):
         self.code.putln("goto %s;" % self.results(node.label))

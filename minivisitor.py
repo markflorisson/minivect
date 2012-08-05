@@ -129,15 +129,13 @@ class PrintTree(TreeVisitor):
     indent = 0
     want_access_path = True
 
-    def format_node(self, node):
+    def format_value(self, node):
         import miniast
-
-        result = type(node).__name__
 
         if node.is_temp:
             format_value = node.repr_name
         elif (isinstance(node, miniast.Variable) or
-                isinstance(node, miniast.FuncNameNode)):
+              isinstance(node, miniast.FuncNameNode)):
             format_value = node.name
         elif node.is_binop or node.is_unop:
             format_value = node.operator
@@ -146,9 +144,16 @@ class PrintTree(TreeVisitor):
         elif node.is_sizeof:
             format_value = str(node.type)
         else:
-            return result
+            return None
 
-        return "%s(%s)" % (result, format_value)
+    def format_node(self, node):
+        result = type(node).__name__
+        format_value = self.format_value(node)
+
+        if format_value:
+            return "%s(%s)" % (result, format_value)
+        else:
+            return result
 
     def visit_Node(self, node):
         if self.access_path:
