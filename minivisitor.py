@@ -135,7 +135,8 @@ class PrintTree(TreeVisitor):
         if node.is_temp:
             format_value = node.repr_name
         elif (isinstance(node, miniast.Variable) or
-              isinstance(node, miniast.FuncNameNode)):
+              isinstance(node, miniast.FuncNameNode) or
+              node.is_funcarg):
             format_value = node.name
         elif node.is_binop or node.is_unop:
             format_value = node.operator
@@ -146,11 +147,15 @@ class PrintTree(TreeVisitor):
         else:
             return None
 
+        return format_value
+
     def format_node(self, node):
         result = type(node).__name__
         format_value = self.format_value(node)
 
         if format_value:
+            if node.is_expression:
+                format_value = "%s, type=%s" % (format_value, node.type)
             return "%s(%s)" % (result, format_value)
         else:
             return result
@@ -160,8 +165,14 @@ class PrintTree(TreeVisitor):
             parent, attr, idx = self.access_path[-1]
         else:
             attr = "(root)"
+            idx = None
 
-        print "%s%s: %s" % (self.indent * "  ", attr, self.format_node(node))
+        prefix = "%s%s" % (self.indent * "  ", attr)
+        if idx is not None:
+            prefix = "%s[%d]" % (prefix, idx)
+
+        print "%s: %s" % (prefix, self.format_node(node))
+
         self.indent += 1
         self.visitchildren(node)
         self.indent -= 1

@@ -269,7 +269,7 @@ class CCodeGen(CodeGen):
         return "(*%s)" % self.visit(node.operand)
 
     def visit_SingleIndexNode(self, node):
-        return "(%s[%s])" % self.results(node.lhs, node.rhs)
+        return "%s[%s]" % self.results(node.lhs, node.rhs)
 
     def visit_SizeofNode(self, node):
         return "sizeof(%s)" % node.sizeof_type
@@ -284,6 +284,9 @@ class CCodeGen(CodeGen):
         if not node.mangled_name:
             node.mangled_name = self.code.mangle(node.name)
         return node.mangled_name
+
+    def visit_NoopExpr(self, node):
+        return ""
 
     def visit_ResolvedVariable(self, node):
         return self.visit(node.element)
@@ -359,15 +362,11 @@ class VectorCodegen(CCodeGen):
         load = self.types[node.type] % 'loadu'
         return '%s(%s)' % (load, self.visit(node.operand))
 
-    def visit_AssignmentExpr(self, node):
-        if node.lhs.type.is_pointer and node.rhs.type.is_vector:
-            # Assignment to data pointer
-            assert node.lhs.type.base_type == node.rhs.type.element_type
-            store = self.types[node.rhs.type] % 'storeu'
-            return '%s(%s, %s)' % (store, self.visit(node.lhs),
-                                          self.visit(node.rhs))
-        else:
-            return super(VectorCodegen, self).visit_AssignmentExpr(node)
+    def visit_VectorStoreNode(self, node):
+        # Assignment to data pointer
+        store = self.types[node.rhs.type] % 'storeu'
+        return '%s(%s, %s)' % (store, self.visit(node.lhs),
+                               self.visit(node.rhs))
 
     def visit_VectorBinopNode(self, node):
         binop_name = self.binops[node.operator]

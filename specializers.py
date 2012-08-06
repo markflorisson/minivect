@@ -89,6 +89,7 @@ class BaseSpecializer(ASTMapper):
     visit_ErrorHandler = visit_Node
     visit_BinopNode = visit_Node
     visit_UnopNode = visit_Node
+    visit_IfNode = visit_Node
 
 class Specializer(BaseSpecializer):
     """
@@ -218,6 +219,7 @@ class FinalSpecializer(BaseSpecializer):
 
     vectorized_equivalents = None
     in_lhs_expr = False
+    should_vectorize = False
 
     def __init__(self, context, previous_specializer):
         super(FinalSpecializer, self).__init__(context)
@@ -250,9 +252,12 @@ class FinalSpecializer(BaseSpecializer):
         """
         if node.type.is_array:
             tiled = self.sp.is_tiled_specializer
+            last_loop_level = (self.loop_level == self.function.ndim or
+                               (self.sp.is_vectorizing_specializer and not
+                                self.should_vectorize))
             inner_contig = (
                 self.sp.is_inner_contig_specializer and
-                self.loop_level == self.function.ndim and
+                last_loop_level and
                 (not self.sp.is_strided_specializer or
                  self.sp.matching_contiguity(node.type)))
 
@@ -268,10 +273,9 @@ class FinalSpecializer(BaseSpecializer):
 
             for_node = self.function.for_loops[self.loop_level - 1]
 
-            if (self.sp.is_vectorizing_specializer and
-                    self.sp.should_vectorize):
-                return self.handle_vector_variable(
-                        data_pointer, for_node)
+            if self.should_vectorize:
+                return self.handle_vector_variable(node, data_pointer, for_node,
+                                                   inner_contig, contig)
             else:
                 element = self.element_location(data_pointer, for_node,
                                                 inner_contig, contig,
@@ -280,6 +284,9 @@ class FinalSpecializer(BaseSpecializer):
                                 node.name, node.type, element)
         else:
             return node
+
+    def visit_VectorVariable(self, vector_variable):
+        return self.visit_Variable(vector_variable.variable)
 
     def element_location(self, data_pointer, for_node,
                          inner_contig, is_contig, tiled):
@@ -290,24 +297,31 @@ class FinalSpecializer(BaseSpecializer):
             # strided access
             return self.astbuilder.dereference(data_pointer)
 
-    def handle_vector_variable(self, data_pointer, for_node):
+    def handle_vector_variable(self, variable, data_pointer, for_node,
+                               inner_contig, is_contig):
         b = self.astbuilder
 
         # For array operands, load reads into registers, and store
         # writes back into the data pointer. For assignment to a register
         # we use a vector type, for assignment to a data pointer, the
         # data pointer type
+
+        if inner_contig or is_contig:
+            data_pointer = b.add(data_pointer, for_node.index)
+
         if self.in_lhs_expr:
             return data_pointer
         else:
-            variable = b.vector_variable(data_pointer, self.sp.vector_size)
+            variable = b.vector_variable(variable, self.sp.vector_size)
             if variable in self.vector_temps:
                 return self.vector_temps[variable]
 
-            rhs = b.vector_load(variable, self.sp.vector_size)
+            rhs = b.vector_load(data_pointer, self.sp.vector_size)
             temp = b.temp(variable.type, 'xmm')
             self.vector_temps[variable] = temp
+
             for_node.prepending_stats.append(b.assign(temp, rhs))
+
             return self.visit(temp)
 
     def compute_temp_strides(self, variable, handle_inner_dim, tiled=False):
@@ -438,14 +452,20 @@ class FinalSpecializer(BaseSpecializer):
         node = self.run_optimizations(node)
         node.prepending_stats = []
         self.visitchildren(node)
-
         node.prepending_stats.append(node.body)
         node.body = self.astbuilder.stats(*node.prepending_stats)
 
         return node
 
+    def _visit_set_vectorizing_flag(self, node):
+        was_vectorizing = self.should_vectorize
+        self.should_vectorize = node.should_vectorize
+        self.visitchildren(node)
+        self.should_vectorize = was_vectorizing
+        return node
+
     def visit_ForNode(self, node):
-        is_nd_fornode = node in self.function.for_loops
+        is_nd_fornode = node in self.function.for_loops or node.is_fixup
         self.loop_level += is_nd_fornode
 
         # Allow modifications while visiting some descendant of this node
@@ -454,7 +474,7 @@ class FinalSpecializer(BaseSpecializer):
         node.prepending_stats = []
         node.appending_stats = []
 
-        self.visitchildren(node)
+        self._visit_set_vectorizing_flag(node)
 
         node.prepending_stats.append(node.body)
         node.prepending_stats.extend(node.appending_stats)
@@ -463,12 +483,23 @@ class FinalSpecializer(BaseSpecializer):
         self.loop_level -= is_nd_fornode
         return node
 
+    def visit_IfNode(self, node):
+        self.loop_level += node.is_fixup
+        result = self._visit_set_vectorizing_flag(node)
+        self.loop_level -= node.is_fixup
+        return result
+
     def visit_AssignmentExpr(self, node):
         # assignment expressions should not be nested
         self.in_lhs_expr = True
         node.lhs = self.visit(node.lhs)
         self.in_lhs_expr = False
         node.rhs = self.visit(node.rhs)
+
+        if node.lhs.type.is_pointer and node.rhs.type.is_vector:
+            # This expression must be a statement
+            return self.astbuilder.vector_store(node.lhs, node.rhs)
+
         return node
 
     def visit_TempNode(self, node):
@@ -565,10 +596,10 @@ class FinalSpecializer(BaseSpecializer):
 
     def visit_PragmaForLoopNode(self, node):
         if self.previous_specializer.is_vectorizing_specializer:
-            node = node.for_node
-
-        self.visitchildren(node)
-        return node
+            return self.visit(node.for_node)
+        else:
+            self.visitchildren(node)
+            return node
 
 
 class OrderedSpecializer(Specializer):
@@ -761,8 +792,6 @@ class VectorizingSpecializer(Specializer):
                                                      specialization_name)
         # temporary registers
         self.temps = {}
-        # assignments to temporary registers
-        self.assignments = []
 
         # Flag to vectorize expressions in a vectorized loop
         self.should_vectorize = True
@@ -777,6 +806,13 @@ class VectorizingSpecializer(Specializer):
     def visit_FunctionNode(self, node):
         self.dtype = get_any_array_argument(node.arguments).type.dtype
         return super(VectorizingSpecializer, self).visit_FunctionNode(node)
+
+    @visit_if_should_vectorize
+    def visit_Variable(self, variable):
+        if variable.type.is_array:
+            variable = self.astbuilder.vector_variable(variable, self.vector_size)
+
+        return variable
 
     @visit_if_should_vectorize
     def visit_BinopNode(self, node):
@@ -800,6 +836,18 @@ class VectorizingSpecializer(Specializer):
                 node = self.astbuilder.vector_unop(node.type, node.operator,
                                                    self.visit(node.operand))
 
+        return node
+
+    @visit_if_should_vectorize
+    def visit_ForNode(self, node):
+        node.should_vectorize = True
+        self.visitchildren(node)
+        return node
+
+    @visit_if_should_vectorize
+    def visit_IfNode(self, node):
+        node.should_vectorize = True
+        self.visitchildren(node)
         return node
 
     def _modify_inner_loop(self, b, elements_per_vector, node, step):
@@ -829,11 +877,16 @@ class VectorizingSpecializer(Specializer):
         """
         b = self.astbuilder
 
+        cond = b.binop(minitypes.bool_, '<', i, N)
         if elements_per_vector - 1 == 1:
-            cond = b.binop(minitypes.bool_, '<', i, N)
             fixup_loop = b.if_(cond, body)
         else:
-            fixup_loop = b.for_range_upwards(body, lower=i, upper=N)
+            # fixup_loop = b.for_range_upwards(body, lower=i, upper=N)
+            init = b.noop_expr()
+            step = b.assign_expr(i, b.add(i, b.constant(1)))
+            fixup_loop = b.for_(body, init, cond, step, index=i)
+
+        fixup_loop.is_fixup = True
 
         self.should_vectorize = False
         fixup_loop = self.visit(fixup_loop)
@@ -855,7 +908,6 @@ class VectorizingSpecializer(Specializer):
         if step is None:
             step = b.constant(1)
 
-        node.body = b.stats(b.stats(*self.assignments), node.body)
         elements_per_vector = self.vector_size * 4 / self.dtype.itemsize
 
         N, i = self._modify_inner_loop(b, elements_per_vector, node, step)
@@ -877,10 +929,8 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         super(StridedCInnerContigSpecializer, self).__init__(
                                     context, specialization_name)
         self.indices = []
-        self.pointers = {}
-        self.outer_pointers = {}
 
-    def _generate_inner_loop(self, b, node, stats):
+    def _generate_inner_loop(self, b, node):
         """
         Generate innermost loop, injecting the pointer assignments in the
         right place
@@ -891,13 +941,11 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
                 loop = node.body
 
             self.inner_loop = loop.body
-            stats.append(b.pragma_for(self.inner_loop))
-            loop.body = b.stats(*stats)
+            loop.body = b.pragma_for(self.inner_loop)
             node = self.omp_for(node)
         else:
             self.inner_loop = loop
-            stats.append(self.omp_for(b.pragma_for(self.inner_loop)))
-            node = b.stats(*stats)
+            node = self.omp_for(b.pragma_for(self.inner_loop))
 
         return loop, node
 
@@ -907,7 +955,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
             fixup_loop = self.process_inner_forloop(self.inner_loop,
                                                     original_expr)
             if len(self.indices) > 1:
-                loop.body.stats.append(fixup_loop)
+                loop.body = b.stats(loop.body, fixup_loop)
             else:
                 node = b.stats(node, fixup_loop)
 
@@ -925,12 +973,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         # start by generating a C or Fortran ordered loop
         self.function.for_loops, node = self.ordered_loop(node.body,
                                                           self.indices)
-        # Create assignments for temporary pointers just outside the innermost
-        # loop
-        #stats = self.compute_inner_dim_pointers()
-        stats = []
-        # Inject the pointers in the inner loop
-        loop, node = self._generate_inner_loop(b, node, stats)
+        loop, node = self._generate_inner_loop(b, node)
         result = self.visit(node)
         node = self._vectorize_inner_loop(b, loop, node, original_expr)
 

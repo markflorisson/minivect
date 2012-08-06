@@ -199,7 +199,7 @@ class Context(object):
 class CContext(Context):
     "Set defaults for C code generation."
 
-    codegen_cls = codegen.CCodeGen
+    codegen_cls = codegen.VectorCodegen
     codewriter_cls = minicode.CCodeWriter
     codeformatter_cls = minicode.CCodeStringFormatter
 
@@ -328,7 +328,7 @@ class ASTBuilder(object):
         """
         return NDIterate(self.pos, body)
 
-    def for_(self, body, init, condition, step):
+    def for_(self, body, init, condition, step, index=None):
         """
         Create a for loop node.
 
@@ -337,7 +337,7 @@ class ASTBuilder(object):
         :param condition: boolean loop condition
         :param step: step clause (assignment expression)
         """
-        return ForNode(self.pos, init, condition, step, body)
+        return ForNode(self.pos, init, condition, step, body, index=index)
 
     def for_range_upwards(self, body, upper, lower=None, step=None):
         """
@@ -648,23 +648,29 @@ class ASTBuilder(object):
     ### Vectorization Functionality
     #
 
+    def _vector_type(self, base_type, size):
+        return minitypes.VectorType(element_type=base_type, vector_size=size)
+
     def vector_variable(self, variable, size):
         "Return a vector variable for a data pointer variable"
-        type = minitypes.VectorType(element_type=variable.type.base_type,
-                                    vector_size=size)
-        return VectorVariable(self.pos, type, variable=variable)
+        type = self._vector_type(variable.type.dtype, size)
 
-    def vector_load(self, variable, size):
+        if size == 4:
+            name = 'xmm_%s' % variable.name
+        else:
+            name = 'ymm_%s' % variable.name
+
+        return VectorVariable(self.pos, type, name, variable=variable)
+
+    def vector_load(self, data_pointer, size):
         "Load a SIMD vector of size `size` given an array operand variable"
-        assert variable.type.is_array or variable.type.is_vector
-        if variable.type.is_array:
-            variable = self.vector_variable(variable, size)
-        return VectorLoadNode(self.pos, variable.type, variable, size=size)
+        type = self._vector_type(data_pointer.type.base_type, size)
+        return VectorLoadNode(self.pos, type, data_pointer, size=size)
 
-    def vector_store(self, variable, size):
+    def vector_store(self, data_pointer, vector_expr):
         "Store a SIMD vector of size `size`"
-        type = self.vector_variable(variable, size).type
-        return VectorStoreNode(self.pos, type, variable, size=size)
+        assert data_pointer.type.base_type == vector_expr.type.element_type
+        return VectorStoreNode(self.pos, None, "=", data_pointer, vector_expr)
 
     def vector_binop(self, operator, lhs, rhs):
         "Perform a binary SIMD operation between two operands of the same type"
@@ -677,6 +683,9 @@ class ASTBuilder(object):
 
     def vector_const(self, type, constant):
         return ConstantVectorNode(self.pos, type, constant=constant)
+
+    def noop_expr(self):
+        return NoopExpr(self.pos, type=None)
 
 class Position(object):
     "Each node has a position which is an instance of this type."
@@ -913,14 +922,17 @@ class ForNode(Node):
     is_controlling_loop = False
     is_tiling_loop = False
 
-    def __init__(self, pos, init, condition, step, body):
+    should_vectorize = False
+    is_fixup = False
+
+    def __init__(self, pos, init, condition, step, body, index=None):
         super(ForNode, self).__init__(pos)
         self.init = init
         self.condition = condition
         self.step = step
         self.body = body
 
-        self.index = init.lhs
+        self.index = index or init.lhs
 
         # insertions of statements that happen during specialization somewhere
         # down in the tree. Prepending statements are inserted before the loop
@@ -932,6 +944,9 @@ class IfNode(Node):
     "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_"
 
     child_attrs = ['cond', 'body']
+
+    should_vectorize = False
+    is_fixup = False
 
 class StatListNode(Node):
     """
@@ -1060,6 +1075,7 @@ class Variable(ExprNode):
     def __init__(self, pos, type, name, **kwargs):
         super(Variable, self).__init__(pos, type, **kwargs)
         self.name = name
+        self.array_type = None
 
     def __eq__(self, other):
         return isinstance(other, Variable) and self.name == other.name
@@ -1175,17 +1191,20 @@ class LabelNode(ExprNode):
         self.name = name
         self.mangled_name = None
 
+class NoopExpr(ExprNode):
+    "Do nothing expression"
+
 #
 ### Vectorization Functionality
 #
 
-class VectorVariable(ExprNode):
+class VectorVariable(Variable):
     child_attrs = ['variable']
 
 class VectorLoadNode(SingleOperandNode):
     "Load a SIMD vector"
 
-class VectorStoreNode(SingleOperandNode):
+class VectorStoreNode(BinopNode):
     "Store a SIMD vector"
 
 class VectorBinopNode(BinopNode):
