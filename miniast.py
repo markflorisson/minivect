@@ -1072,6 +1072,8 @@ class Variable(ExprNode):
     is_variable = True
     mangled_name = None
 
+    hoisted = False
+
     def __init__(self, pos, type, name, **kwargs):
         super(Variable, self).__init__(pos, type, **kwargs)
         self.name = name

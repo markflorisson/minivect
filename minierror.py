@@ -15,3 +15,15 @@ class UnmappableFormatSpecifierError(Error):
 
 class InvalidTypeSpecification(Error):
     "Raised when a type is sliced incorrectly."
+
+class CompileError(Error):
+    "Raised for miscellaneous errors"
+
+    def __init__(self, node, msg):
+        self.node = node
+        self.msg = msg
+
+    def __str__(self):
+        if self.node.pos is not None:
+            return "%s:%s:%s: %s" % self.node.pos + self.msg
+        return self.msg

@@ -4,7 +4,9 @@ explanations.
 """
 
 import inspect
+
 miniast = None # avoid circular import AttributeError for sphinx-apidoc
+import treepath
 
 class TreeVisitor(object):
     """
@@ -78,6 +80,9 @@ class TreeVisitor(object):
                 result[attr] = self.visit_childlist(child, parent, attr)
 
         return result
+
+    def treepath(self, node, xpath_expr):
+        return treepath.iterfind(node, xpath_expr)
 
 class VisitorTransform(TreeVisitor):
     """

@@ -139,10 +139,7 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
             node.rhs = self.hoist(node.rhs)
             binop = b.binop(node.type, node.operator, node.lhs, node.rhs)
 
-            if lhs_hoisting_level < rhs_hoisting_level:
-                node.rhs = b.assign(node.rhs, binop)
-            else:
-                node.lhs = b.assign(node.lhs, binop)
+            return binop
 
     def _make_temp_binop_operands(self, node):
         if broadcasting(node.lhs.broadcasting, node.rhs.broadcasting):
@@ -167,6 +164,11 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         elif node.lhs.hoistable or node.rhs.hoistable:
             self._hoist_binop_operands(b, node)
 
+        return node
+
+    def visit_ForNode(self, node):
+        self.visitchildren(node)
+        self.handle_pending_stats(node)
         return node
 
     def visit_BinopNode(self, node):
@@ -205,17 +207,26 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
             if not broadcasting:
                 break
 
-        return self.function.ndim - 1 - i - 1
+        return self.function.ndim - 1 - i
 
     def hoist(self, node):
-        if node.is_variable or not node.hoistable:
+        if not node.hoistable:
             return node
 
         b = self.astbuilder
 
         hoisting_level = self.hoisting_level(node)
-        for_loop = self.function.for_loops[hoisting_level]
+        if hoisting_level < 0:
+            for_loop = self.function
+        else:
+            for_loop = self.function.for_loops[hoisting_level]
 
-        temp = b.temp(node.type, name='hoisted_temp')
-        for_loop.body = b.stats(b.assign(temp, node), for_loop.body)
+        temp = b.temp(node.type.dtype, name='hoisted_temp')
+
+        # TODO: keep track of the variables
+        for variable in self.treepath(node, '//Variable'):
+            variable.hoisted = True
+
+        stat = b.assign(temp, node)
+        for_loop.body = b.stats(stat, for_loop.body)
         return self.visit(temp)

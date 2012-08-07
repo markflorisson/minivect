@@ -16,6 +16,7 @@ import functools
 import minivisitor
 import miniutils
 import minitypes
+import minierror
 
 strength_reduction = True
 
@@ -76,6 +77,15 @@ class BaseSpecializer(ASTMapper):
         # node = copy.copy(node)
         self.visitchildren(node)
         return node
+
+    def handle_pending_stats(self, node):
+        """
+        Handle any pending statements that need to be inserted further
+        up in the AST.
+        """
+        node.prepending_stats.append(node.body)
+        node.prepending_stats.extend(node.appending_stats)
+        node.body = self.astbuilder.stats(*node.prepending_stats)
 
     #
     ### Stubs for cooperative multiple inheritance
@@ -239,9 +249,11 @@ class FinalSpecializer(BaseSpecializer):
     def run_optimizations(self, node):
         import optimize
 
-        #if not self.previous_specializer.is_contig_specializer:
-            #optimizer = optimize.HoistBroadcastingExpressions(self.context)
-            #node = optimizer.visit(node)
+        # TODO: support vectorized specializations
+        if not (self.sp.is_contig_specializer or
+                self.sp.is_vectorizing_specializer):
+            optimizer = optimize.HoistBroadcastingExpressions(self.context)
+            node = optimizer.visit(node)
 
         return node
 
@@ -257,7 +269,7 @@ class FinalSpecializer(BaseSpecializer):
                                 self.should_vectorize))
             inner_contig = (
                 self.sp.is_inner_contig_specializer and
-                last_loop_level and
+                (last_loop_level or node.hoisted) and
                 (not self.sp.is_strided_specializer or
                  self.sp.matching_contiguity(node.type)))
 
@@ -475,10 +487,7 @@ class FinalSpecializer(BaseSpecializer):
         node.appending_stats = []
 
         self._visit_set_vectorizing_flag(node)
-
-        node.prepending_stats.append(node.body)
-        node.prepending_stats.extend(node.appending_stats)
-        node.body = self.astbuilder.stats(*node.prepending_stats)
+        self.handle_pending_stats(node)
 
         self.loop_level -= is_nd_fornode
         return node

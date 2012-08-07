@@ -220,7 +220,7 @@ class CCodeGen(CodeGen):
         return "(%s%s)" % (node.operator, self.visit(node.operand))
 
     def _mangle_temp(self, node):
-        name = self.code.mangle(node.name)
+        name = self.code.mangle(node.repr_name or node.name)
         if name in self.temp_names:
             name = "%s%d" % (name, len(self.declared_temps))
         node.name = name
