@@ -194,6 +194,10 @@ class CCodeGen(CodeGen):
         self.visit(node.body)
         self.code.putln("}")
 
+    def visit_PromotionNode(self, node):
+        # Use C rules for promotion
+        return self.visit(node.operand)
+
     def visit_FuncCallNode(self, node):
         return "%s(%s)" % (self.visit(node.func_or_pointer),
                            ", ".join(self.results(node.args)))

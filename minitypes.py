@@ -32,6 +32,8 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'long_', 'bool_', 'obj
            'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
            'complex64', 'complex128', 'complex256']
 
+import sys
+
 try:
     import llvm.core as lc
 except ImportError:
@@ -92,6 +94,7 @@ class TypeMapper(object):
     >>> tm.promote_types(int_[:, :], object_[:, ::1])
     PyObject *[:, :]
     """
+
     def __init__(self, context):
         self.context = context
 
@@ -117,12 +120,19 @@ class TypeMapper(object):
 
     def from_python(self, value):
         "Get a type from a python value"
+        np = sys.modules.get('numpy', None)
+
         if isinstance(value, float):
             return double
         elif isinstance(value, (int, long)):
             return int_
         elif isinstance(value, complex):
             return complex128
+        elif np and isinstance(value, np.ndarray):
+            dtype = map_dtype(value.dtype)
+            return ArrayType(dtype, value.ndim,
+                             is_c_contig=value.flags['C_CONTIGUOUS'],
+                             is_f_contig=value.flags['F_CONTIGUOUS'])
         else:
             return object_
             # raise minierror.UnmappableTypeError(type(value))
@@ -156,6 +166,44 @@ class TypeMapper(object):
         else:
             raise minierror.UnpromotableTypeError((type1, type2))
 
+def map_dtype(dtype):
+    """
+    >>> _map_dtype(np.dtype(np.int32))
+    int32
+    >>> _map_dtype(np.dtype(np.int64))
+    int64
+    >>> _map_dtype(np.dtype(np.object))
+    PyObject *
+    >>> _map_dtype(np.dtype(np.float64))
+    double
+    >>> _map_dtype(np.dtype(np.complex128))
+    complex128
+    """
+    item_idx = int(math.log(dtype.itemsize, 2))
+    if dtype.kind == 'i':
+        return [int8, int16, int32, int64][item_idx]
+    elif dtype.kind == 'u':
+        return [uint8, uint16, uint32, uint64][item_idx]
+    elif dtype.kind == 'f':
+        if dtype.itemsize == 2:
+            pass # half floats not supported yet
+        elif dtype.itemsize == 4:
+            return float32
+        elif dtype.itemsize == 8:
+            return float64
+        elif dtype.itemsize == 16:
+            return float128
+    elif dtype.kind == 'b':
+        return int8
+    elif dtype.kind == 'c':
+        if dtype.itemsize == 8:
+            return complex64
+        elif dtype.itemsize == 16:
+            return complex128
+        elif dtype.itemsize == 32:
+            return complex256
+    elif dtype.kind == 'O':
+        return object_
 
 class Type(miniutils.ComparableObjectMixin):
     """

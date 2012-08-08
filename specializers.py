@@ -517,7 +517,7 @@ class FinalSpecializer(BaseSpecializer):
 
     def visit_BinopNode(self, node):
         type = self.get_type(node.type)
-        if node.operator == '%' and type.is_float:
+        if node.operator == '%' and type.is_float and not self.context.use_llvm:
             # rewrite module for floats
             b = self.astbuilder
             functype = minitypes.FunctionType(return_type=type,
@@ -549,6 +549,22 @@ class FinalSpecializer(BaseSpecializer):
 
         self.visitchildren(node)
         return node
+
+    def visit_DereferenceNode(self, node):
+        node.operand = self.visit(node.operand)
+        if self.context.llvm:
+            node = self.astbuilder.index(node, self.astbuilder.constant(0))
+        return node
+
+    def visit_IfElseExprNode(self, node):
+        b = self.astbuilder
+        temp = b.temp(node.lhs.type, name='if_temp')
+        stat = b.if_else(b.assign(temp, node.lhs), b.assign(temp, node.rhs))
+
+        for_node = self.for_nodes[self.loop_level - 1]
+        for_node.prepending_stats.append(stat)
+
+        return temp
 
     def visit_PositionInfoNode(self, node):
         """

@@ -84,6 +84,9 @@ class TreeVisitor(object):
     def treepath(self, node, xpath_expr):
         return treepath.iterfind(node, xpath_expr)
 
+    def p(self, node):
+        node.print_tree(self.context)
+
 class VisitorTransform(TreeVisitor):
     """
     Mutating transform. Each attribute is replaced by the result of the
@@ -106,6 +109,16 @@ class VisitorTransform(TreeVisitor):
                             newlist.append(x)
                 setattr(parent, attr, newlist)
         return result
+
+class GenericVisitor(TreeVisitor):
+    "Generic visitor that automatically visits children"
+
+    def visit_Node(self, node):
+        self.visitchildren(node)
+        return node
+
+class GenericTransform(VisitorTransform, GenericVisitor):
+    "Generic transform that automatically visits children"
 
 class MayErrorVisitor(TreeVisitor):
     """
@@ -158,9 +171,13 @@ class PrintTree(TreeVisitor):
         result = type(node).__name__
         format_value = self.format_value(node)
 
-        if format_value:
-            if node.is_expression:
+        if node.is_expression:
+            if format_value:
                 format_value = "%s, type=%s" % (format_value, node.type)
+            else:
+                format_value = "type=%s" % (node.type,)
+
+        if format_value:
             return "%s(%s)" % (result, format_value)
         else:
             return result

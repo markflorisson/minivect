@@ -12,9 +12,18 @@ import minitypes
 import miniutils
 import minivisitor
 import specializers
+import type_promoter
 import minicode
 import codegen
+import llvm_codegen
 import graphviz
+
+try:
+    import llvm.core
+    import llvm.ee
+    import llvm.passes
+except ImportError:
+    llvm = None
 
 class UndocClassAttribute(object):
     def __init__(self, cls):
@@ -85,6 +94,8 @@ class Context(object):
 
     debug = False
 
+    use_llvm = False
+
     codegen_cls = UndocClassAttribute(codegen.VectorCodegen)
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
     codewriter_cls = UndocClassAttribute(minicode.CodeWriter)
@@ -98,6 +109,20 @@ class Context(object):
 
     def __init__(self):
         self.init()
+        if self.use_llvm:
+            if llvm is None:
+                import llvm.core as llvm_py_not_available # llvm-py not available
+
+            self.llvm_module = llvm.core.Module.new('default_module')
+            self.llvm_ee = llvm.ee.ExecutionEngine.new(self.llvm_module)
+            self.llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
+            self.llvm_fpm.initialize()
+            if not self.debug:
+                for llvm_pass in self.llvm_passes():
+                    self.llvm_fpm.add(llvm_pass)
+        else:
+            self.llvm_ee = None
+            self.llvm_module = None
 
     def init(self):
         self.astbuilder = ASTBuilder(self)
@@ -139,6 +164,10 @@ class Context(object):
             final_specializer = final_specializer_cls(self, specializer)
             specialized_ast = final_specializer.visit(specialized_ast)
 
+            # Promote types in binops
+            type_promoting_specializer = type_promoter.TypePromoter(self)
+            specialized_ast = type_promoting_specializer.visit(specialized_ast)
+
             if print_tree:
                 specialized_ast.print_tree(self)
 
@@ -161,6 +190,13 @@ class Context(object):
     #
     ### Override in subclasses where needed
     #
+
+    def llvm_passes(self):
+        "Returns a list of LLVM optimization passes"
+        return [
+            llvm.passes.PASS_PROMOTE_MEMORY_TO_REGISTER,
+            llvm.passes.PASS_DEAD_CODE_ELIMINATION,
+        ]
 
     def promote_types(self, type1, type2):
         "Promote types in an arithmetic operation"
@@ -203,6 +239,12 @@ class CContext(Context):
     codewriter_cls = minicode.CCodeWriter
     codeformatter_cls = minicode.CCodeStringFormatter
 
+class LLVMContext(Context):
+    "Context with default for LLVM code generation"
+
+    use_llvm = True
+    codegen_cls = llvm_codegen.LLVMCodeGen
+
 class ASTBuilder(object):
     """
     This class is used to build up a minivect AST. It can be used by a user
@@ -232,6 +274,14 @@ class ASTBuilder(object):
             return minitypes.CStringType()
         else:
             raise minierror.InferTypeError()
+
+    def _func_arg_types(self, array_args, scalar_args):
+        for arg in array_args + scalar_args:
+            for variable in arg.variables:
+                if variable.type.is_array:
+                    yield variable.type.dtype.pointer()
+                else:
+                    yield variable.type
 
     def function(self, name, body, args, shapevar=None, posinfo=None,
                  omp_size=None):
@@ -266,11 +316,32 @@ class ASTBuilder(object):
         if posinfo:
             arguments.insert(1, posinfo)
         body = self.nditerate(body)
-        return FunctionNode(self.pos, name, body, arguments, scalar_arguments,
+
+        error_value = self.constant(-1)
+        success_value = self.constant(0)
+
+        type = minitypes.FunctionType(
+            return_type=success_value.type,
+            args=list(self._func_arg_types(arguments, scalar_arguments)))
+
+        return FunctionNode(self.pos, type, name, body,
+                            arguments, scalar_arguments,
                             shapevar, posinfo,
-                            error_value=self.constant(-1),
-                            success_value=self.constant(0),
+                            error_value=error_value,
+                            success_value=success_value,
                             omp_size=omp_size or self.constant(1024))
+
+    def build_function(self, variables, body, name=None):
+        "Convenience method for building a minivect function"
+        args = []
+        for var in variables:
+            if var.type.is_array:
+                args.append(self.array_funcarg(var))
+            else:
+                args.append(self.funcarg(var))
+
+        name = name or 'function'
+        return self.function(name, body, args)
 
     def funcarg(self, variable, *variables, **kwargs):
         """
@@ -406,12 +477,21 @@ class ASTBuilder(object):
 
     def if_(self, cond, body):
         "If statement"
-        return IfNode(self.pos, cond=cond, body=body)
+        return self.if_else(self.pos, cond, body, None)
 
     def if_else_expr(self, cond, lhs, rhs):
         "If/else expression, resulting in lhs if cond else rhs"
         type = self.context.promote_types(lhs.type, rhs.type)
         return IfElseExprNode(self.pos, type=type, cond=cond, lhs=lhs, rhs=rhs)
+
+    def if_else(self, cond, if_body, else_body):
+        return IfNode(self.pos, cond, body=if_body, else_body=else_body)
+
+    def promote(self, dst_type, node):
+        "Promote or demote the node to the given dst_type"
+        if node.type != dst_type:
+            return PromotionNode(self.pos, dst_type, node)
+        return node
 
     def binop(self, type, op, lhs, rhs):
         """
@@ -811,9 +891,10 @@ class FunctionNode(Node):
 
     child_attrs = ['body', 'arguments', 'scalar_arguments']
 
-    def __init__(self, pos, name, body, arguments, scalar_arguments,
+    def __init__(self, pos, type, name, body, arguments, scalar_arguments,
                  shape, posinfo, error_value, success_value, omp_size):
         super(FunctionNode, self).__init__(pos)
+        self.type = type
         self.name = name
         self.body = body
         self.arguments = arguments
@@ -896,6 +977,12 @@ class ArrayFunctionArgument(ExprNode):
     child_attrs = ['data_pointer', 'strides_pointer']
     is_array_funcarg = True
 
+    def __init__(self, pos, type, data_pointer, strides_pointer, **kwargs):
+        super(ArrayFunctionArgument, self).__init__(pos, type, **kwargs)
+        self.data_pointer = data_pointer
+        self.strides_pointer = strides_pointer
+        self.variables = [data_pointer, strides_pointer]
+
 class PrintNode(Node):
     "Print node for some arguments"
 
@@ -943,7 +1030,7 @@ class ForNode(Node):
 class IfNode(Node):
     "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_"
 
-    child_attrs = ['cond', 'body']
+    child_attrs = ['cond', 'body', 'else_body']
 
     should_vectorize = False
     is_fixup = False
@@ -1033,6 +1120,9 @@ class AssignmentExpr(BinaryOperationNode):
 
 class IfElseExprNode(ExprNode):
     child_attrs = ['cond', 'lhs', 'rhs']
+
+class PromotionNode(SingleOperandNode):
+    pass
 
 class UnopNode(SingleOperandNode):
 

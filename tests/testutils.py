@@ -18,12 +18,17 @@ from xmldumper import etree, tostring
 def getcontext():
     return miniast.CContext()
 
-def specialize(specializer_cls, ast):
-    context = getcontext()
+def get_llvm_context():
+    return miniast.LLVMContext()
+
+def specialize(specializer_cls, ast, context=None, print_tree=False):
+    context = context or getcontext()
     specializers = [specializer_cls]
-    result = iter(context.run(ast, specializers)).next()
-    _, specialized_ast, _, (proto, impl) = result
-    return specialized_ast, impl
+    result = iter(context.run(ast, specializers, print_tree=print_tree)).next()
+    _, specialized_ast, _, code_result = result
+    if not context.use_llvm:
+        prototype, code_result = code_result
+    return specialized_ast, code_result
 
 def run(specializers, ast):
     context = getcontext()
@@ -35,15 +40,7 @@ def build_vars(*types):
     return [b.variable(type, 'op%d' % i) for i, type in enumerate(types)]
 
 def build_function(variables, body, name=None):
-    args = []
-    for var in variables:
-        if var.type.is_array:
-            args.append(b.array_funcarg(var))
-        else:
-            args.append(b.funcarg(var))
-
-    name = name or 'function'
-    return b.function(name, body, args)
+    return context.astbuilder.build_function(variables, body, name)
 
 def toxml(function):
     return xmldumper.XMLDumper(context).visit(function)
