@@ -6,6 +6,8 @@ ctypes function.
 import math
 import ctypes
 
+import minitypes
+
 def convert_to_ctypes(type):
     "Convert the minitype to a ctypes type"
     if type.is_pointer:
@@ -19,6 +21,11 @@ def convert_to_ctypes(type):
             return ctypes.c_double
         else:
             return ctypes.c_longdouble
+    elif type.is_numpy_intp or type.is_py_ssize_t:
+        if minitypes._plat_bits == 32:
+            return ctypes.c_int32
+        else:
+            return ctypes.c_int64
     elif type.is_int:
         item_idx = int(math.log(type.itemsize))
         if type.is_signed:
@@ -56,3 +63,7 @@ def get_ctypes_func(func, llvm_func, llvm_execution_engine, context):
     ctypes_func_type = convert_to_ctypes(func.type)
     p = llvm_execution_engine.get_pointer_to_function(llvm_func)
     return ctypes_func_type(p)
+
+def get_data_pointer(numpy_array, array_type):
+    dtype_pointer = array_type.dtype.pointer()
+    return numpy_array.ctypes.data_as(convert_to_ctypes(dtype_pointer))

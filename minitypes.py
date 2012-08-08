@@ -33,14 +33,23 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'long_', 'bool_', 'obj
            'complex64', 'complex128', 'complex256']
 
 import sys
+import math
 
 try:
-    import llvm.core as lc
+    import llvm.core
+    from llvm import core as lc
 except ImportError:
-    lc = None
+    llvm = None
 
 import miniutils
 import minierror
+
+# Check below taken from Numba
+if sys.maxint > 2**33:
+    _plat_bits = 64
+else:
+    _plat_bits = 32
+
 
 class TypeMapper(object):
     """
@@ -205,6 +214,11 @@ def map_dtype(dtype):
     elif dtype.kind == 'O':
         return object_
 
+NONE_KIND = 0
+INT_KIND = 1
+FLOAT_KIND = 2
+COMPLEX_KIND = 3
+
 class Type(miniutils.ComparableObjectMixin):
     """
     Base class for all types.
@@ -230,6 +244,8 @@ class Type(miniutils.ComparableObjectMixin):
     is_int_like = False
     is_complex = False
     is_void = False
+
+    KIND = NONE_KIND
 
     subtypes = []
 
@@ -364,7 +380,7 @@ class PointerType(Type):
         return "%s *%s" % (self.base_type, " ".join(self.qualifiers))
 
     def to_llvm(self, context):
-        return lc.Type.pointer(self.base_type.to_llvm(context))
+        return llvm.core.Type.pointer(self.base_type.to_llvm(context))
 
 class CArrayType(Type):
     is_carray = True
@@ -379,7 +395,7 @@ class CArrayType(Type):
         return "%s[%d]" % (self.base_type, self.length)
 
     def to_llvm(self, context):
-        return lc.Type.array(self.base_type.to_llvm(context), self.size)
+        return llvm.core.Type.array(self.base_type.to_llvm(context), self.size)
 
 class TypeWrapper(Type):
     is_typewrapper = True
@@ -443,6 +459,8 @@ class IntType(NumericType):
     rank = 4
     itemsize = 4
 
+    kind = INT_KIND
+
     def to_llvm(self, context):
         if self.itemsize == 1:
             return lc.Type.int(8)
@@ -456,6 +474,8 @@ class IntType(NumericType):
 
 class FloatType(NumericType):
     is_float = True
+
+    kind = FLOAT_KIND
 
     @property
     def comparison_type_list(self):
@@ -475,11 +495,24 @@ class ComplexType(NumericType):
     is_complex = True
     subtypes = ['base_type']
 
+    kind = COMPLEX_KIND
+
 class Py_ssize_t_Type(IntType):
     is_py_ssize_t = True
     name = "Py_ssize_t"
     rank = 9
     signed = True
+
+    def to_llvm(self, context):
+        # TODO: something more accurate
+        return NPyIntp().to_llvm(context)
+
+class NPyIntp(IntType):
+    is_numpy_intp = True
+    name = "npy_intp"
+
+    def to_llvm(self, context):
+        return llvm.core.Type.int(_plat_bits)
 
 class CharType(IntType):
     is_char = True
@@ -522,6 +555,13 @@ class FunctionType(Type):
                                 [arg_type.to_llvm(context)
                                     for arg_type in self.args],
                                 self.is_vararg)
+
+    def __str__(self):
+        args = map(str, self.args)
+        if self.is_vararg:
+            args.append("...")
+
+        return "%s (*)(%s)" % (self.return_type, ", ".join(args))
 
 class VectorType(Type):
     subtypes = ['element_type']

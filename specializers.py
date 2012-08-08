@@ -1185,6 +1185,11 @@ class ContigSpecializer(OrderedSpecializer):
     specialization_name = "contig"
     is_contig_specializer = True
 
+    def visit_FunctionNode(self, node):
+        node = super(ContigSpecializer, self).visit_FunctionNode(node)
+        self.astbuilder.create_function_type(node, strides_args=False)
+        return node
+
     def visit_NDIterate(self, node):
         """
         Generate a single ForNode over the total data size.

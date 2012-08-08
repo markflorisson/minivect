@@ -275,13 +275,18 @@ class ASTBuilder(object):
         else:
             raise minierror.InferTypeError()
 
-    def _func_arg_types(self, array_args, scalar_args):
-        for arg in array_args + scalar_args:
-            for variable in arg.variables:
-                if variable.type.is_array:
-                    yield variable.type.dtype.pointer()
-                else:
-                    yield variable.type
+    def create_function_type(self, function, strides_args=True):
+        arg_types = []
+        for arg in function.arguments + function.scalar_arguments:
+            if arg.type.is_array and not strides_args:
+                arg_types.append(arg.data_pointer.type)
+                arg.variables = [arg.data_pointer]
+            else:
+                for variable in arg.variables:
+                    arg_types.append(variable.type)
+
+        function.type = minitypes.FunctionType(
+                    return_type=function.success_value.type, args=arg_types)
 
     def function(self, name, body, args, shapevar=None, posinfo=None,
                  omp_size=None):
@@ -320,18 +325,17 @@ class ASTBuilder(object):
         error_value = self.constant(-1)
         success_value = self.constant(0)
 
-        type = minitypes.FunctionType(
-            return_type=success_value.type,
-            args=list(self._func_arg_types(arguments, scalar_arguments)))
-
-        return FunctionNode(self.pos, type, name, body,
+        function = FunctionNode(self.pos, name, body,
                             arguments, scalar_arguments,
                             shapevar, posinfo,
                             error_value=error_value,
                             success_value=success_value,
                             omp_size=omp_size or self.constant(1024))
 
-    def build_function(self, variables, body, name=None):
+        self.create_function_type(function)
+        return function
+
+    def build_function(self, variables, body, name=None, shapevar=None):
         "Convenience method for building a minivect function"
         args = []
         for var in variables:
@@ -341,7 +345,7 @@ class ASTBuilder(object):
                 args.append(self.funcarg(var))
 
         name = name or 'function'
-        return self.function(name, body, args)
+        return self.function(name, body, args, shapevar=shapevar)
 
     def funcarg(self, variable, *variables, **kwargs):
         """
@@ -418,12 +422,14 @@ class ASTBuilder(object):
         :param body: the loop body
         :param upper: expression specifying an upper bound
         """
-        if lower is None:
-            lower = self.constant(0)
-        if step is None:
-            step = self.constant(1)
+        index_type = upper.type
 
-        temp = self.temp(minitypes.Py_ssize_t)
+        if lower is None:
+            lower = self.constant(0, index_type)
+        if step is None:
+            step = self.constant(1, index_type)
+
+        temp = self.temp(index_type)
         init = self.assign_expr(temp, lower)
         condition = self.binop(minitypes.bool_, '<', temp, upper)
         step = self.assign_expr(temp, self.add(temp, step))
@@ -490,6 +496,10 @@ class ASTBuilder(object):
     def promote(self, dst_type, node):
         "Promote or demote the node to the given dst_type"
         if node.type != dst_type:
+
+            if node.is_constant and node.type.kind == dst_type.kind:
+                node.type = dst_type
+                return node
             return PromotionNode(self.pos, dst_type, node)
         return node
 
@@ -891,10 +901,10 @@ class FunctionNode(Node):
 
     child_attrs = ['body', 'arguments', 'scalar_arguments']
 
-    def __init__(self, pos, type, name, body, arguments, scalar_arguments,
+    def __init__(self, pos, name, body, arguments, scalar_arguments,
                  shape, posinfo, error_value, success_value, omp_size):
         super(FunctionNode, self).__init__(pos)
-        self.type = type
+        self.type = None # see ASTBuilder.create_function_type
         self.name = name
         self.body = body
         self.arguments = arguments

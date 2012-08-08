@@ -1,3 +1,5 @@
+import sys
+
 try:
     import llvm.core
     import llvm.ee
@@ -13,7 +15,7 @@ import ctypes_conversion
 
 class LLVMCodeGen(codegen.CodeGen):
 
-    in_lhs_expr = False
+    in_lhs_expr = 0
 
     def __init__(self, context, codewriter):
         super(LLVMCodeGen, self).__init__(context, codewriter)
@@ -282,13 +284,16 @@ class LLVMCodeGen(codegen.CodeGen):
         return llvm_temp
 
     def visit_AssignmentExpr(self, node):
-        self.in_lhs_expr = True
+        self.in_lhs_expr += 1
         lhs = self.visit(node.lhs)
-        self.in_lhs_expr = False
+        self.in_lhs_expr -= 1
         rhs = self.visit(node.rhs)
-        if not isinstance(lhs, llvm.core.Value): node.lhs.print_tree(self.context)
-        if not isinstance(rhs, llvm.core.Value):
-            node.rhs.print_tree(self.context)
+#        if lhs.type.kind != llvm.core.TYPE_POINTER:
+#            print '-' * 80
+#            self.p(node)
+#            print lhs, lhs.type
+#            print rhs, rhs.type
+            #sys.exit("LHS is not a pointer")
         return self.builder.store(rhs, lhs)
 
     def visit_CastNode(self, node):
@@ -299,8 +304,16 @@ class LLVMCodeGen(codegen.CodeGen):
         raise NotImplementedError(node.type)
 
     def visit_SingleIndexNode(self, node):
-        result = self.builder.gep(self.visit(node.lhs), [self.visit(node.rhs)])
-        return self.builder.load(result)
+        self.in_lhs_expr += 1
+        lhs = self.visit(node.lhs)
+        self.in_lhs_expr -= 1
+        rhs = self.visit(node.rhs)
+        result = self.builder.gep(lhs, [rhs])
+
+        if self.in_lhs_expr:
+            return result
+        else:
+            return self.builder.load(result)
 
     def visit_DereferenceNode(self, node):
         node = self.astbuilder.index(node.operand, self.astbuilder.constant(0))
@@ -310,7 +323,11 @@ class LLVMCodeGen(codegen.CodeGen):
         return self.visit(self.astbuilder.constant(node.type.itemsize))
 
     def visit_Variable(self, node):
-        return self.symtab[node.name]
+        value = self.symtab[node.name]
+        if self.in_lhs_expr:
+            return value
+        else:
+            return self.builder.load(value)
 
     def visit_NoopExpr(self, node):
         pass

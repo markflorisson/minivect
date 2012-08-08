@@ -172,7 +172,7 @@ class PrintTree(TreeVisitor):
         format_value = self.format_value(node)
 
         if node.is_expression:
-            if format_value:
+            if format_value is not None:
                 format_value = "%s, type=%s" % (format_value, node.type)
             else:
                 format_value = "type=%s" % (node.type,)
