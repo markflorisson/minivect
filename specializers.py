@@ -17,6 +17,7 @@ import minivisitor
 import miniutils
 import minitypes
 import minierror
+import codegen
 
 strength_reduction = True
 
@@ -244,8 +245,6 @@ class FinalSpecializer(BaseSpecializer):
         self.outer_pointers = {}
         self.vector_temps = {}
 
-        self.indices = self.sp.indices
-
     def run_optimizations(self, node):
         import optimize
 
@@ -461,6 +460,7 @@ class FinalSpecializer(BaseSpecializer):
 
     def visit_FunctionNode(self, node):
         self.function = node
+        self.indices = self.sp.indices
         node = self.run_optimizations(node)
         node.prepending_stats = []
         self.visitchildren(node)
@@ -565,6 +565,26 @@ class FinalSpecializer(BaseSpecializer):
         for_node.prepending_stats.append(stat)
 
         return temp
+
+    def visit_PrintNode(self, node):
+        b = self.astbuilder
+
+        printf_type = minitypes.FunctionType(
+                return_type=minitypes.int_,
+                args=[minitypes.CStringType()],
+                is_vararg=True)
+
+        printf = b.funcname(printf_type, 'printf')
+
+        args = []
+        specifiers = []
+        for i, arg in enumerate(node.args):
+            specifier, arg = codegen.format_specifier(arg, b)
+            args.append(arg)
+            specifiers.append(specifier)
+
+        args.insert(0, b.constant(" ".join(specifiers) + "\n"))
+        return b.expr_stat(b.funccall(printf, args))
 
     def visit_PositionInfoNode(self, node):
         """

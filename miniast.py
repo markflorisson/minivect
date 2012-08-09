@@ -92,7 +92,7 @@ class Context(object):
     Use subclass :py:class:`CContext` to get the defaults for C code generation.
     """
 
-    debug = False
+    debug = True
 
     use_llvm = False
 
@@ -143,30 +143,11 @@ class Context(object):
         """
         for specializer_class in specializer_classes:
             self.init()
+            pipeline = self.pipeline(specializer_class)
 
-            # add specializer mixin and run specializer
-            if self.specializer_mixin_cls:
-                specializer_class = make_cls(self.specializer_mixin_cls,
-                                             specializer_class)
-
-            specializer = specializer_class(self)
-            specialized_ast = specializer.visit(
-                                    specializers.specialize_ast(ast))
-
-            # Add variable resolving mixin to the final specializer and run
-            # transform
-            final_specializer_cls = self.final_specializer
-            if self.variable_resolving_mixin_cls:
-                final_specializer_cls = make_cls(
-                        self.variable_resolving_mixin_cls,
-                        final_specializer_cls)
-
-            final_specializer = final_specializer_cls(self, specializer)
-            specialized_ast = final_specializer.visit(specialized_ast)
-
-            # Promote types in binops
-            type_promoting_specializer = type_promoter.TypePromoter(self)
-            specialized_ast = type_promoting_specializer.visit(specialized_ast)
+            specialized_ast = specializers.specialize_ast(ast)
+            for transform in pipeline:
+                specialized_ast = transform.visit(specialized_ast)
 
             if print_tree:
                 specialized_ast.print_tree(self)
@@ -179,8 +160,31 @@ class Context(object):
             codegen = self.codegen_cls(self, codewriter)
             codegen.visit(specialized_ast)
 
-            yield (specializer, specialized_ast, codewriter,
+            yield (pipeline[0], specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
+
+    def pipeline(self, specializer_class):
+        # add specializer mixin and run specializer
+        if self.specializer_mixin_cls:
+            specializer_class = make_cls(self.specializer_mixin_cls,
+                                         specializer_class)
+
+        specializer = specializer_class(self)
+        pipeline = [specializer]
+
+        # Add variable resolving mixin to the final specializer and run
+        # transform
+        final_specializer_cls = self.final_specializer
+        if final_specializer_cls:
+            if self.variable_resolving_mixin_cls:
+                final_specializer_cls = make_cls(
+                    self.variable_resolving_mixin_cls,
+                    final_specializer_cls)
+
+            pipeline.append(final_specializer_cls(self, specializer))
+
+        pipeline.append(type_promoter.TypePromoter(self))
+        return pipeline
 
     def generate_disposal_code(self, code, node):
         "Run the disposal code generator on an (sub)AST"
@@ -624,6 +628,8 @@ class ASTBuilder(object):
         """
         if type is None:
             type = self._infer_type(value)
+        if type.is_c_string:
+            value = value.encode('string-escape')
         return ConstantNode(self.pos, type, value)
 
     def variable(self, type, name):

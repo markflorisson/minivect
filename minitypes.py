@@ -34,6 +34,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'long_', 'bool_', 'obj
 
 import sys
 import math
+import ctypes
 
 try:
     import llvm.core
@@ -503,16 +504,19 @@ class Py_ssize_t_Type(IntType):
     rank = 9
     signed = True
 
-    def to_llvm(self, context):
-        # TODO: something more accurate
-        return NPyIntp().to_llvm(context)
+    def __init__(self, **kwds):
+        super(Py_ssize_t_Type, self).__init__(**kwds)
+        self.itemsize = _plat_bits / 8
 
 class NPyIntp(IntType):
     is_numpy_intp = True
     name = "npy_intp"
 
-    def to_llvm(self, context):
-        return llvm.core.Type.int(_plat_bits)
+    def __init__(self):
+        super(NPyIntp, self).__init__()
+        import numpy as np
+        ctypes_array = np.empty(0).ctypes.strides
+        self.itemsize = ctypes.sizeof(ctypes_array._type_)
 
 class CharType(IntType):
     is_char = True

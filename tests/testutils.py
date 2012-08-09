@@ -14,6 +14,7 @@ import treepath
 
 from minitypes import *
 from xmldumper import etree, tostring
+from ctypes_conversion import get_data_pointer, convert_to_ctypes
 
 def getcontext():
     return miniast.CContext()

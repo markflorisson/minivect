@@ -136,6 +136,7 @@ class CCodeGen(CodeGen):
         return self.visit(node.expr)
 
     def visit_PrintNode(self, node):
+        raise NotImplementedError
         output = ['printf("']
         for i, arg in enumerate(node.args):
             specifier, arg = format_specifier(arg, self.specializer.astbuilder)
@@ -310,7 +311,7 @@ class CCodeGen(CodeGen):
 
     def visit_ConstantNode(self, node):
         if node.type.is_c_string:
-            return '"%s"' % node.value.encode('string-escape')
+            return '"%s"' % node.value
         return str(node.value)
 
     def visit_ErrorHandler(self, node):

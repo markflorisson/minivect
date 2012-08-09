@@ -39,8 +39,6 @@ class LLVMCodeGen(codegen.CodeGen):
         return bb
 
     def visit_FunctionNode(self, node):
-        code = self.code
-
         self.specializer = node.specializer
         self.function = node
         self.llvm_module = self.context.llvm_module
@@ -57,7 +55,7 @@ class LLVMCodeGen(codegen.CodeGen):
         self.add_arguments(node)
         self.visit(node.body)
 
-        self.context.llvm_fpm.run(self.lfunc)
+        # self.context.llvm_fpm.run(self.lfunc)
         self.code.write(self.lfunc)
         ctypes_func = ctypes_conversion.get_ctypes_func(
                     node, self.lfunc, self.context.llvm_ee, self.context)
@@ -137,6 +135,13 @@ class LLVMCodeGen(codegen.CodeGen):
 
     def visit_ReturnNode(self, node):
         self.builder.ret(self.visit(node.operand))
+
+    def visit_CastNode(self, node):
+        result = self.visit(node.operand)
+        if node.type.is_pointer:
+            return result.bitcast(node.type)
+
+        return self.visit_PromotionNode(node)
 
     def visit_PromotionNode(self, node):
         result = self.visit(node.operand)
@@ -288,32 +293,23 @@ class LLVMCodeGen(codegen.CodeGen):
         lhs = self.visit(node.lhs)
         self.in_lhs_expr -= 1
         rhs = self.visit(node.rhs)
-#        if lhs.type.kind != llvm.core.TYPE_POINTER:
-#            print '-' * 80
-#            self.p(node)
-#            print lhs, lhs.type
-#            print rhs, rhs.type
-            #sys.exit("LHS is not a pointer")
         return self.builder.store(rhs, lhs)
 
-    def visit_CastNode(self, node):
-        result = self.visit(node.operand)
-        if node.type.is_pointer:
-            return result.bitcast(node.type)
-
-        raise NotImplementedError(node.type)
-
     def visit_SingleIndexNode(self, node):
-        self.in_lhs_expr += 1
+        in_lhs_expr = self.in_lhs_expr
+        if in_lhs_expr:
+            self.in_lhs_expr -= 1
         lhs = self.visit(node.lhs)
-        self.in_lhs_expr -= 1
         rhs = self.visit(node.rhs)
+        if in_lhs_expr:
+            self.in_lhs_expr += 1
+
         result = self.builder.gep(lhs, [rhs])
 
         if self.in_lhs_expr:
             return result
         else:
-            return self.builder.load(result)
+           return self.builder.load(result)
 
     def visit_DereferenceNode(self, node):
         node = self.astbuilder.index(node.operand, self.astbuilder.constant(0))
@@ -324,10 +320,14 @@ class LLVMCodeGen(codegen.CodeGen):
 
     def visit_Variable(self, node):
         value = self.symtab[node.name]
+        return value
         if self.in_lhs_expr:
             return value
         else:
             return self.builder.load(value)
+
+    def visit_ArrayAttribute(self, node):
+        return self.symtab[node.name]
 
     def visit_NoopExpr(self, node):
         pass
@@ -349,7 +349,29 @@ class LLVMCodeGen(codegen.CodeGen):
 
         return self.labels[node]
 
+    def handle_string_constant(self, b, constant):
+        #lchar = minitypes.char.to_llvm(self.context)
+        #ltype = llvm.core.Type.array(lchar, len(constant) + 1)
+        string_constants = self.context.string_constants = getattr(
+                                    self.context, 'string_constants', {})
+        if constant in string_constants:
+            lvalue = string_constants[constant]
+        else:
+            lstring = llvm.core.Constant.stringz(constant)
+            lvalue = self.context.llvm_module.add_global_variable(
+                        lstring.type, "__string_%d" % len(string_constants))
+            lvalue.initializer = lstring
+            lvalue.linkage = llvm.core.LINKAGE_INTERNAL
+
+            lzero = self.visit(b.constant(0))
+            lvalue = self.builder.gep(lvalue, [lzero, lzero])
+            string_constants[constant] = lvalue
+
+        return lvalue
+
     def visit_ConstantNode(self, node):
+        b = self.astbuilder
+
         ltype = node.type.to_llvm(self.context)
         constant = node.value
 
@@ -359,6 +381,8 @@ class LLVMCodeGen(codegen.CodeGen):
             lvalue = llvm.core.Constant.int(ltype, constant)
         elif node.type.is_pointer and self.pyval == 0:
             lvalue = llvm.core.ConstantPointerNull
+        elif node.type.is_c_string:
+            lvalue = self.handle_string_constant(b, constant)
         else:
             raise NotImplementedError("Constant %s of type %s" % (constant,
                                                                   node.type))
@@ -371,7 +395,13 @@ class LLVMCodeGen(codegen.CodeGen):
         return self.builder.call(llvm_func, llvm_args)
 
     def visit_FuncNameNode(self, node):
-        raise NotImplementedError
+        try:
+            printf = self.context.llvm_module.get_function_named('printf')
+        except llvm.LLVMException:
+            func_type = node.type.to_llvm(self.context)
+            printf = self.context.llvm_module.add_function(func_type, node.name)
+
+        return printf
 
     def visit_FuncRefNode(self, node):
         raise NotImplementedError

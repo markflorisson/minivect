@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 
 import miniast
@@ -6,11 +8,12 @@ import minitypes
 import codegen
 import xmldumper
 import treepath
-from ctypes_conversion import get_data_pointer
+from ctypes_conversion import get_data_pointer, convert_to_ctypes
 
-
+context_debug = True
 
 class LazyLLVMContext(miniast.LLVMContext):
+    debug = context_debug
     def stridesvar(self, variable):
         return miniast.StridePointer(self.pos, minitypes.NPyIntp.pointer(),
                                      variable)
@@ -19,6 +22,7 @@ context = LazyLLVMContext()
 b = context.astbuilder
 
 ccontext = miniast.CContext()
+ccontext.debug = context_debug
 
 func_counter = 0
 
@@ -31,6 +35,7 @@ def specialize(specializer_cls, ast, context=context):
 def specialize_c(specializer_cls, ast):
     specialized_ast, (proto, impl) = specialize(specializer_cls, ast, ccontext)
     return specialized_ast, impl
+
 
 class Lazy(object):
 
@@ -49,11 +54,13 @@ class Lazy(object):
                                 shapevar=shapevar)
 
         specializer = specializers.ContigSpecializer
+
         specialized_func, (llvm_func, ctypes_func) = specialize(specializer, func)
         func_counter += 1
 
-        print specialized_func.print_tree(context)
-        print specialize_c(specializer, func)[1]
+        # print specialize_c(specializer, func)[1]
+        # print specialized_func.print_tree(context)
+        # print llvm_func
 
         return ctypes_func, variables, specializer
 
@@ -78,7 +85,6 @@ class Lazy(object):
             else:
                 raise NotImplementedError
 
-        print args
         return ctypes_func(*args)
 
 class Binop(Lazy):
@@ -132,8 +138,25 @@ def lazy_array(numpy_array):
         return numpy_array
     return LazyArray(numpy_array)
 
-if __name__ == '__main__':
+def test():
+    """
+    >>> test()
+    [[   0.    2.    4.    6.    8.   10.   12.   14.   16.   18.]
+     [  20.   22.   24.   26.   28.   30.   32.   34.   36.   38.]
+     [  40.   42.   44.   46.   48.   50.   52.   54.   56.   58.]
+     [  60.   62.   64.   66.   68.   70.   72.   74.   76.   78.]
+     [  80.   82.   84.   86.   88.   90.   92.   94.   96.   98.]
+     [ 100.  102.  104.  106.  108.  110.  112.  114.  116.  118.]
+     [ 120.  122.  124.  126.  128.  130.  132.  134.  136.  138.]
+     [ 140.  142.  144.  146.  148.  150.  152.  154.  156.  158.]
+     [ 160.  162.  164.  166.  168.  170.  172.  174.  176.  178.]
+     [ 180.  182.  184.  186.  188.  190.  192.  194.  196.  198.]]
+    """
     a = np.arange(100, dtype=np.double).reshape(10, 10)
     lazy_a = lazy_array(a)
     lazy_a[:, :] = lazy_a + lazy_a
     print a
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
