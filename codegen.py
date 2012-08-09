@@ -3,6 +3,9 @@ Code generator module. Subclass CodeGen to implement a code generator
 as a visitor.
 """
 
+import sys
+import string
+
 import minierror
 import minitypes
 import minivisitor
@@ -227,7 +230,8 @@ class CCodeGen(CodeGen):
     def _mangle_temp(self, node):
         name = self.code.mangle(node.repr_name or node.name)
         if name in self.temp_names:
-            name = "%s%d" % (name, len(self.declared_temps))
+            name = "%s_%d" % (name.rstrip(string.digits),
+                              len(self.declared_temps))
         node.name = name
         self.temp_names.add(name)
         self.declared_temps.add(node)

@@ -6,6 +6,7 @@ AST nodes or different implementations.
 """
 
 import copy
+import string
 import types
 
 import minitypes
@@ -92,7 +93,7 @@ class Context(object):
     Use subclass :py:class:`CContext` to get the defaults for C code generation.
     """
 
-    debug = True
+    debug = False
 
     use_llvm = False
 
@@ -616,7 +617,8 @@ class ASTBuilder(object):
     def temp(self, type, name=None):
         "Allocate a temporary of a given type"
         name = name or 'temp'
-        repr_name = '%s%d' % (name, self.temp_reprname_counter)
+        repr_name = '%s%d' % (name.rstrip(string.digits),
+                              self.temp_reprname_counter)
         self.temp_reprname_counter += 1
         return TempNode(self.pos, type, name=name, repr_name=repr_name)
 
@@ -869,6 +871,9 @@ class ExprNode(Node):
     "Base class for expressions. Each node has a type."
 
     is_expression = True
+
+    hoistable = False
+    need_temp = False
 
     def __init__(self, pos, type, **kwds):
         super(ExprNode, self).__init__(pos, **kwds)

@@ -6,6 +6,10 @@ import minitypes
 import specializers
 
 def admissible(broadcasting_tuple, n_loops):
+    """
+    Check for admissibility. Indicates whether partial hoisting is the most
+    efficient thing to perform. See also partially_hoistable()
+    """
     if len(broadcasting_tuple) < n_loops:
         # In this this situation, we pad with leading broadcasting dimensions.
         # This means we have to hoist all the way
@@ -19,6 +23,18 @@ def admissible(broadcasting_tuple, n_loops):
 
     # Check for all trailing values (at least one) being True
     return broadcasting_tuple[i:] and miniutils.all(broadcasting_tuple[i:])
+
+def partially_hoistable(broadcasting_tuple, n_loops):
+    """
+    This function indicates, when admissible() returns false, whether an
+    expression is partially hoistable. This means the caller must establish
+    whether repeated computation or an array temporary will be more beneficial.
+
+    If the expression is a variable, there is no repeaetd computation, and
+    it should be hoisted as far as possible.
+    """
+    return broadcasting_tuple[-1]
+
 
 def broadcasting(broadcasting_tuple1, broadcasting_tuple2):
     return broadcasting_tuple1 != broadcasting_tuple2
@@ -106,40 +122,50 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         return node
 
     def visit_Variable(self, node):
-        self.visit_ExprNode(node)
-
         type = node.type
         if type.is_array and type.broadcasting is not None:
-            if admissible(type.broadcasting, len(self.function.for_loops)):
+            n_loops = len(self.function.for_loops)
+            if admissible(type.broadcasting, n_loops):
+                node.hoistable = True
+            elif partially_hoistable(type.broadcasting, n_loops):
+                # TODO: see whether `node` should be fully (array temporary)
+                # TODO: or partially hoisted
                 node.hoistable = True
             elif miniutils.any(type.broadcasting):
-                node.need_temp = True
+                pass # enable when temporaries are implemented in minivect
+                # node.need_temp = True
 
             node.broadcasting = type.broadcasting
 
         return node
 
-    def visit_ExprNode(self, node):
-        self.visitchildren(node)
-        node.hoistable = False
-        node.need_temp = False
+    def visit_ArrayAtribute(self, node):
         return node
-
-    visit_TempNode = visit_ExprNode
 
     def _hoist_binop_operands(self, b, node):
         lhs_hoisting_level = self.hoisting_level(node.lhs)
         rhs_hoisting_level = self.hoisting_level(node.rhs)
 
         if lhs_hoisting_level == rhs_hoisting_level:
+            print 'equal'
             node.hoistable = True
             node.broadcasting = node.lhs.broadcasting
-        else:
-            node.lhs = self.hoist(node.lhs)
-            node.rhs = self.hoist(node.rhs)
-            binop = b.binop(node.type, node.operator, node.lhs, node.rhs)
+            return node
 
-            return binop
+        def binop():
+            result = b.binop(node.type, node.operator, node.lhs, node.rhs)
+            result.broadcasting = broadcasting
+            result.hoistable = True
+            return result
+
+        if lhs_hoisting_level < rhs_hoisting_level:
+            broadcasting = node.rhs.broadcasting
+            node.lhs = self.hoist(node.lhs)
+            return self.hoist(binop())
+        else: # lhs_hoisting_level > rhs_hoisting_level
+            broadcasting = node.lhs.broadcasting
+            node.rhs = self.hoist(node.rhs)
+            return self.hoist(binop())
 
     def _make_temp_binop_operands(self, node):
         if broadcasting(node.lhs.broadcasting, node.rhs.broadcasting):
@@ -155,14 +181,12 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
 
         self.visitchildren(node)
 
-        node.hoistable = False
-        node.need_temp = False
         node.broadcasting = None
 
         if node.lhs.need_temp or node.rhs.need_temp:
-            self._make_temp_binop_operands(node)
+            return self._make_temp_binop_operands(node)
         elif node.lhs.hoistable or node.rhs.hoistable:
-            self._hoist_binop_operands(b, node)
+            return self._hoist_binop_operands(b, node)
 
         return node
 
