@@ -458,6 +458,10 @@ class ASTBuilder(object):
                               if_clause=if_clause,
                               lastprivates=[for_node.init.lhs])
 
+    def omp_if(self, if_body, else_body=None):
+        return OpenMPConditionalNode(self.pos, if_body=if_body,
+                                     else_body=else_body)
+
     def pragma_for(self, for_node):
         """
         Annotate the for loop with pragmas.
@@ -1238,6 +1242,12 @@ class OpenMPLoopNode(Node):
     Execute a loop in parallel.
     """
     child_attrs = ['for_node', 'if_clause', 'lastprivates']
+
+class OpenMPConditionalNode(Node):
+    """
+    Execute if_body if _OPENMP, otherwise execute else_body.
+    """
+    child_attrs = ['if_body', 'else_body']
 
 class PragmaForLoopNode(Node):
     """

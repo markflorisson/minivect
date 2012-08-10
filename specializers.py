@@ -408,11 +408,16 @@ class FinalSpecializer(BaseSpecializer):
                                         'specializer', self.sp)
 
             if for_node.is_controlling_loop:
-                expr = b.add(temp, b.mul(stride, for_node.blocksize))
-            else:
-                expr = b.add(temp, stride)
+                stride = b.mul(stride, for_node.blocksize)
 
-            for_node.appending_stats.append(b.assign(temp, expr))
+            stat = b.assign(temp, b.add(temp, stride))
+            if not outer_pointers:
+                omp_body = b.assign(temp, b.add(outer_pointer,
+                                                b.mul(stride, for_node.index)))
+                for_node.prepending_stats.append(b.omp_if(omp_body))
+                for_node.appending_stats.append(b.omp_if(None, stat))
+            else:
+                for_node.appending_stats.append(stat)
 
             self.outer_pointers[variable].append(temp)
 

@@ -138,17 +138,6 @@ class CCodeGen(CodeGen):
         self.visit(node.stat)
         return self.visit(node.expr)
 
-    def visit_PrintNode(self, node):
-        raise NotImplementedError
-        output = ['printf("']
-        for i, arg in enumerate(node.args):
-            specifier, arg = format_specifier(arg, self.specializer.astbuilder)
-            node.args[i] = arg
-            output.append("%%%s " % specifier)
-
-        self.code.putln('%s\\n", %s);' % ("".join(output).rstrip(),
-                                          ", ".join(self.results(*node.args))))
-
     def visit_OpenMPLoopNode(self, node):
         self.code.putln("#ifdef _OPENMP")
         lastprivates = self.results(node.lastprivates)
@@ -157,6 +146,20 @@ class CCodeGen(CodeGen):
                                              ", ".join(lastprivates)))
         self.code.putln("#endif")
         self.visit(node.for_node)
+
+    def visit_OpenMPConditionalNode(self, node):
+        if node.if_body:
+            self.code.putln("#ifdef _OPENMP")
+            self.visit(node.if_body)
+
+        if node.else_body:
+            if not node.if_body:
+                self.code.putln("#ifndef _OPENMP")
+            else:
+                self.code.putln("#else")
+
+            self.visit(node.else_body)
+        self.code.putln("#endif")
 
     def put_intel_pragmas(self, code):
         """
