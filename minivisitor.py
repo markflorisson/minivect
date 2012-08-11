@@ -84,6 +84,9 @@ class TreeVisitor(object):
     def treepath(self, node, xpath_expr):
         return treepath.iterfind(node, xpath_expr)
 
+    def treepath_first(self, node, xpath_expr):
+        return treepath.find_first(node, xpath_expr)
+
     def p(self, node):
         node.print_tree(self.context)
 

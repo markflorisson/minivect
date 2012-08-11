@@ -75,6 +75,11 @@ class LLVMCodeGen(codegen.CodeGen):
         self.visitchildren(node)
         return node
 
+    def visit_OpenMPConditionalNode(self, node):
+        if node.else_body:
+            self.visit(node.else_body)
+        return node
+
     def visit_ForNode(self, node):
         '''
         Implements simple for loops with iternode as range, xrange

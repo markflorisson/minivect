@@ -246,7 +246,7 @@ class Type(miniutils.ComparableObjectMixin):
     is_complex = False
     is_void = False
 
-    KIND = NONE_KIND
+    kind = NONE_KIND
 
     subtypes = []
 
@@ -512,8 +512,8 @@ class NPyIntp(IntType):
     is_numpy_intp = True
     name = "npy_intp"
 
-    def __init__(self):
-        super(NPyIntp, self).__init__()
+    def __init__(self, **kwds):
+        super(NPyIntp, self).__init__(**kwds)
         import numpy as np
         ctypes_array = np.empty(0).ctypes.strides
         self.itemsize = ctypes.sizeof(ctypes_array._type_)

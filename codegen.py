@@ -99,7 +99,7 @@ class CCodeGen(CodeGen):
         self.specializer = node.specializer
         self.function = node
 
-        name = code.mangle(node.name + node.specialization_name)
+        name = code.mangle(node.mangled_name + node.specialization_name)
         node.mangled_name = name
 
         args = self.results(node.arguments + node.scalar_arguments)
@@ -140,10 +140,15 @@ class CCodeGen(CodeGen):
 
     def visit_OpenMPLoopNode(self, node):
         self.code.putln("#ifdef _OPENMP")
-        lastprivates = self.results(node.lastprivates)
-        self.code.putln("#pragma omp parallel for if(%s) lastprivate(%s)" %
-                                            (self.visit(node.if_clause),
-                                             ", ".join(lastprivates)))
+
+        if_clause = self.visit(node.if_clause)
+        lastprivates = ", ".join(self.results(node.lastprivates))
+        privates = ""
+        if node.privates:
+            privates = " private(%s)" % ", ".join(self.results(node.privates))
+
+        pragma = "#pragma omp parallel for if(%s) lastprivate(%s)%s default(none)"
+        self.code.putln(pragma % (if_clause, lastprivates, privates))
         self.code.putln("#endif")
         self.visit(node.for_node)
 
@@ -199,6 +204,9 @@ class CCodeGen(CodeGen):
     def visit_IfNode(self, node):
         self.code.putln("if (%s) {" % self.results(node.cond))
         self.visit(node.body)
+        if node.else_body:
+            self.code.putln("} else {")
+            self.visit(node.else_body)
         self.code.putln("}")
 
     def visit_PromotionNode(self, node):
@@ -219,10 +227,7 @@ class CCodeGen(CodeGen):
         self.code.putln("return %s;" % self.results(node.operand))
 
     def visit_BinopNode(self, node):
-        if node.operator == '%':
-            op = '%%'
-        else:
-            op = node.operator
+        op = node.operator
         return "(%s %s %s)" % (self.visit(node.lhs),
                                op,
                                self.visit(node.rhs))
@@ -265,7 +270,7 @@ class CCodeGen(CodeGen):
                                     node.rhs.operator,
                                     self.visit(node.rhs.rhs))
         elif (node.is_statement and node.lhs.is_temp and
-                  node.lhs not in self.declared_temps):
+                  node.lhs not in self.declared_temps and node.may_reorder):
             self._mangle_temp(node.lhs)
             self._declare_temp(node.lhs, self.visit(node.rhs))
         else:

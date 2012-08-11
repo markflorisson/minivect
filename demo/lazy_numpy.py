@@ -87,6 +87,9 @@ class Lazy(object):
 
         return ctypes_func(*args)
 
+    def __add__(self, other):
+        return Binop("+", self, lazy_array(other))
+
 class Binop(Lazy):
 
     def __init__(self, op, lhs, rhs):
@@ -108,9 +111,6 @@ class LazyArray(Lazy):
     def __init__(self, numpy_array):
         super(LazyArray, self).__init__()
         self.numpy_array = numpy_array
-
-    def __add__(self, other):
-        return Binop("+", self, lazy_array(other))
 
     def _map(self, variables):
         minidtype = minitypes.map_dtype(self.numpy_array.dtype)
@@ -158,5 +158,6 @@ def test():
     print a
 
 if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
+    test()
+    #import doctest
+    #doctest.testmod()

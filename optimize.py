@@ -147,7 +147,6 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         rhs_hoisting_level = self.hoisting_level(node.rhs)
 
         if lhs_hoisting_level == rhs_hoisting_level:
-            print 'equal'
             node.hoistable = True
             node.broadcasting = node.lhs.broadcasting
             return node
@@ -251,6 +250,6 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         for variable in self.treepath(node, '//Variable'):
             variable.hoisted = True
 
-        stat = b.assign(temp, node)
+        stat = b.assign(temp, node, may_reorder=False)
         for_loop.body = b.stats(stat, for_loop.body)
         return self.visit(temp)

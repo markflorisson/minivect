@@ -96,6 +96,7 @@ class Context(object):
     debug = False
 
     use_llvm = False
+    optimize_broadcasting = True
 
     codegen_cls = UndocClassAttribute(codegen.VectorCodegen)
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
@@ -105,6 +106,8 @@ class Context(object):
 
     specializer_mixin_cls = None
     variable_resolving_mixin_cls = None
+
+    func_counter = 0
 
     final_specializer = specializers.FinalSpecializer
 
@@ -203,6 +206,11 @@ class Context(object):
             llvm.passes.PASS_DEAD_CODE_ELIMINATION,
         ]
 
+    def mangle_function_name(self, name):
+        name = "%s_%d" % (name, self.func_counter)
+        self.func_counter += 1
+        return name
+
     def promote_types(self, type1, type2):
         "Promote types in an arithmetic operation"
         return self.typemapper.promote_types(type1, type2)
@@ -283,7 +291,7 @@ class ASTBuilder(object):
     def create_function_type(self, function, strides_args=True):
         arg_types = []
         for arg in function.arguments + function.scalar_arguments:
-            if arg.type.is_array and not strides_args:
+            if arg.type and arg.type.is_array and not strides_args:
                 arg_types.append(arg.data_pointer.type)
                 arg.variables = [arg.data_pointer]
             else:
@@ -427,7 +435,7 @@ class ASTBuilder(object):
         :param body: the loop body
         :param upper: expression specifying an upper bound
         """
-        index_type = upper.type
+        index_type = upper.type.unqualify("const")
 
         if lower is None:
             lower = self.constant(0, index_type)
@@ -456,7 +464,8 @@ class ASTBuilder(object):
             for_node = for_node.for_node
         return OpenMPLoopNode(self.pos, for_node=for_node,
                               if_clause=if_clause,
-                              lastprivates=[for_node.init.lhs])
+                              lastprivates=[for_node.init.lhs],
+                              privates=[])
 
     def omp_if(self, if_body, else_body=None):
         return OpenMPConditionalNode(self.pos, if_body=if_body,
@@ -492,7 +501,7 @@ class ASTBuilder(object):
 
     def if_(self, cond, body):
         "If statement"
-        return self.if_else(self.pos, cond, body, None)
+        return self.if_else(cond, body, None)
 
     def if_else_expr(self, cond, lhs, rhs):
         "If/else expression, resulting in lhs if cond else rhs"
@@ -500,7 +509,7 @@ class ASTBuilder(object):
         return IfElseExprNode(self.pos, type=type, cond=cond, lhs=lhs, rhs=rhs)
 
     def if_else(self, cond, if_body, else_body):
-        return IfNode(self.pos, cond, body=if_body, else_body=else_body)
+        return IfNode(self.pos, cond=cond, body=if_body, else_body=else_body)
 
     def promote(self, dst_type, node):
         "Promote or demote the node to the given dst_type"
@@ -591,16 +600,18 @@ class ASTBuilder(object):
 
         return self.dereference(pointer)
 
-    def assign_expr(self, node, value):
+    def assign_expr(self, node, value, may_reorder=False):
         "Create an assignment expression assigning ``value`` to ``node``"
         assert node is not None
         if not isinstance(value, Node):
             value = self.constant(value)
-        return AssignmentExpr(self.pos, node.type, node, value)
+        return AssignmentExpr(self.pos, node.type, node, value,
+                              may_reorder=may_reorder)
 
-    def assign(self, node, value):
+    def assign(self, node, value, may_reorder=False):
         "Assignment statement"
-        return self.expr_stat(self.assign_expr(node, value))
+        expr = self.assign_expr(node, value, may_reorder=may_reorder)
+        return self.expr_stat(expr)
 
     def dereference(self, pointer):
         "Dereference a pointer"
@@ -1116,8 +1127,8 @@ class NodeWrapper(ExprNode):
 class BinaryOperationNode(ExprNode):
     "Base class for binary operations"
     child_attrs = ['lhs', 'rhs']
-    def __init__(self, pos, type, lhs, rhs):
-        super(BinaryOperationNode, self).__init__(pos, type)
+    def __init__(self, pos, type, lhs, rhs, **kwds):
+        super(BinaryOperationNode, self).__init__(pos, type, **kwds)
         self.lhs, self.rhs = lhs, rhs
 
 class BinopNode(BinaryOperationNode):
@@ -1241,7 +1252,7 @@ class OpenMPLoopNode(Node):
     """
     Execute a loop in parallel.
     """
-    child_attrs = ['for_node', 'if_clause', 'lastprivates']
+    child_attrs = ['for_node', 'if_clause', 'lastprivates', 'privates']
 
 class OpenMPConditionalNode(Node):
     """

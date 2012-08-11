@@ -79,14 +79,56 @@ class BaseSpecializer(ASTMapper):
         self.visitchildren(node)
         return node
 
+
+    def init_pending_stats(self, node):
+        """
+        Allow modifications while visiting some descendant of this node
+        This happens especially while variables are resolved, which
+        calls compute_inner_dim_pointer()
+        """
+        b = self.astbuilder
+        node.prepending, node.appending = b.stats(), b.stats()
+        node.body = b.stats(node.prepending, node.body, node.appending)
+
     def handle_pending_stats(self, node):
         """
         Handle any pending statements that need to be inserted further
         up in the AST.
         """
-        node.prepending_stats.append(node.body)
-        node.prepending_stats.extend(node.appending_stats)
-        node.body = self.astbuilder.stats(*node.prepending_stats)
+        b = self.astbuilder
+        node.body = b.stats(node.prepending, node.body, node.appending)
+        node.body = self.fuse_omp_stats(node.body)
+
+    def fuse_omp_stats(self, node):
+        """
+        Fuse consecutive OpenMPConditionalNodes.
+        """
+        import miniast
+
+        if not node.stats:
+            return node
+
+        b = self.astbuilder
+        stats = [node.stats[0]]
+        for next_stat in node.stats[1:]:
+            stat = stats[-1]
+            c1 = isinstance(stat, miniast.OpenMPConditionalNode)
+            c2 = isinstance(next_stat, miniast.OpenMPConditionalNode)
+
+            if c1 and c2:
+                if_body = None
+                else_body = None
+
+                if stat.if_body or next_stat.if_body:
+                    if_body = b.stats(stat.if_body, next_stat.if_body)
+                if stat.else_body or next_stat.else_body:
+                    else_body = b.stats(stat.else_body, next_stat.else_body)
+
+                stats[-1] = b.omp_if(if_body, else_body)
+            else:
+                stats.append(next_stat)
+
+        return b.stats(*stats)
 
     #
     ### Stubs for cooperative multiple inheritance
@@ -139,8 +181,9 @@ class Specializer(BaseSpecializer):
         called.
         """
         stats = [
-            b.print_(b.constant("Calling function %s (%s specializer)" % (
-                                       node.name, self.specialization_name)))
+            b.print_(b.constant(
+                "Calling function %s (%s specializer)" % (
+                                node.mangled_name, self.specialization_name)))
         ]
         if self.is_vectorizing_specializer:
             stats.append(
@@ -173,6 +216,8 @@ class Specializer(BaseSpecializer):
         """
         b = self.astbuilder
         self.compute_total_shape(node)
+
+        node.mangled_name = self.context.mangle_function_name(node.name)
 
         # set this so bad people can specialize during code generation time
         node.specializer = self
@@ -249,7 +294,8 @@ class FinalSpecializer(BaseSpecializer):
         import optimize
 
         # TODO: support vectorized specializations
-        if not (self.sp.is_contig_specializer or
+        if (self.context.optimize_broadcasting and not
+                self.sp.is_contig_specializer or
                 self.sp.is_vectorizing_specializer):
             optimizer = optimize.HoistBroadcastingExpressions(self.context)
             node = optimizer.visit(node)
@@ -331,7 +377,7 @@ class FinalSpecializer(BaseSpecializer):
             temp = b.temp(variable.type, 'xmm')
             self.vector_temps[variable] = temp
 
-            for_node.prepending_stats.append(b.assign(temp, rhs))
+            for_node.prepending.stats.append(b.assign(temp, rhs))
 
             return self.visit(temp)
 
@@ -357,8 +403,9 @@ class FinalSpecializer(BaseSpecializer):
                                  name="%s_stride%d" % (variable.name, dim))
 
             stat = b.assign(temp_stride,
-                            b.div(stride, b.sizeof(variable.type.dtype)))
-            self.function.prepending_stats.append(stat)
+                            b.div(stride, b.sizeof(variable.type.dtype)),
+                            may_reorder=True)
+            self.function.prepending.stats.append(stat)
             strides[dim] = temp_stride
 
         return strides
@@ -395,13 +442,16 @@ class FinalSpecializer(BaseSpecializer):
             if not outer_pointers: #i == offset:
                 outer_node = self.function
                 outer_pointer = self.function.args[variable.name].data_pointer
+                may_reorder = True
             else:
                 outer_node = self.function.for_loops[i - 1]
                 outer_pointer = outer_pointers[-1]
+                may_reorder = False
 
-            outer_node.prepending_stats.append(b.assign(temp, outer_pointer))
+            assmt = b.assign(temp, outer_pointer, may_reorder=may_reorder)
+            outer_node.prepending.stats.append(assmt)
 
-            stride = self.strides[variable][dim]
+            stride = original_stride = self.strides[variable][dim]
             assert stride is not None, ('strides', self.strides[variable],
                                         'dim', dim, 'start', start,
                                         'stop', stop, 'offset', offset,
@@ -413,11 +463,14 @@ class FinalSpecializer(BaseSpecializer):
             stat = b.assign(temp, b.add(temp, stride))
             if not outer_pointers:
                 omp_body = b.assign(temp, b.add(outer_pointer,
-                                                b.mul(stride, for_node.index)))
-                for_node.prepending_stats.append(b.omp_if(omp_body))
-                for_node.appending_stats.append(b.omp_if(None, stat))
+                                                b.mul(original_stride, for_node.index)))
+                for_node.prepending.stats.append(b.omp_if(omp_body))
+                for_node.appending.stats.append(b.omp_if(None, stat))
+                omp_for = self.treepath_first(self.function, '//OpenMPLoopNode')
+                if omp_for is not None:
+                    omp_for.privates.append(temp)
             else:
-                for_node.appending_stats.append(stat)
+                for_node.appending.stats.append(stat)
 
             self.outer_pointers[variable].append(temp)
 
@@ -467,10 +520,12 @@ class FinalSpecializer(BaseSpecializer):
         self.function = node
         self.indices = self.sp.indices
         node = self.run_optimizations(node)
-        node.prepending_stats = []
+        self.init_pending_stats(node)
+        # node.prepending_stats = []
         self.visitchildren(node)
-        node.prepending_stats.append(node.body)
-        node.body = self.astbuilder.stats(*node.prepending_stats)
+        # node.prepending_stats.append(node.body)
+        # node.body = self.astbuilder.stats(*node.prepending_stats)
+        self.handle_pending_stats(node)
 
         return node
 
@@ -485,12 +540,7 @@ class FinalSpecializer(BaseSpecializer):
         is_nd_fornode = node in self.function.for_loops or node.is_fixup
         self.loop_level += is_nd_fornode
 
-        # Allow modifications while visiting some descendant of this node
-        # This happens especially while variables are resolved, which
-        # calls compute_inner_dim_pointer().
-        node.prepending_stats = []
-        node.appending_stats = []
-
+        self.init_pending_stats(node)
         self._visit_set_vectorizing_flag(node)
         self.handle_pending_stats(node)
 
@@ -562,14 +612,19 @@ class FinalSpecializer(BaseSpecializer):
         return node
 
     def visit_IfElseExprNode(self, node):
-        b = self.astbuilder
-        temp = b.temp(node.lhs.type, name='if_temp')
-        stat = b.if_else(b.assign(temp, node.lhs), b.assign(temp, node.rhs))
+        self.visitchildren(node)
 
-        for_node = self.for_nodes[self.loop_level - 1]
-        for_node.prepending_stats.append(stat)
+        if self.context.use_llvm:
+            b = self.astbuilder
+            temp = b.temp(node.lhs.type, name='if_temp')
+            stat = b.if_else(node.cond, b.assign(temp, node.lhs),
+                                        b.assign(temp, node.rhs))
+            for_node = self.function.for_loops[self.loop_level - 1]
+            for_node.prepending.stats.append(stat)
 
-        return temp
+            node = temp
+
+        return node
 
     def visit_PrintNode(self, node):
         b = self.astbuilder
@@ -651,6 +706,9 @@ class FinalSpecializer(BaseSpecializer):
             self.visitchildren(node)
             return node
 
+    def visit_StatListNode(self, node):
+        self.visitchildren(node)
+        return self.fuse_omp_stats(node)
 
 class OrderedSpecializer(Specializer):
     """
@@ -669,7 +727,8 @@ class OrderedSpecializer(Specializer):
         extents = [b.index(node.shape, b.constant(i))
                        for i in range(node.ndim)]
         node.total_shape = b.temp(node.shape.type.base_type)
-        init_shape = b.assign(node.total_shape, reduce(b.mul, extents))
+        init_shape = b.assign(node.total_shape, reduce(b.mul, extents),
+                              may_reorder=True)
         node.body = b.stats(init_shape, node.body)
         return node.total_shape
 

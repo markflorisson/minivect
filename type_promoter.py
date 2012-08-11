@@ -40,6 +40,10 @@ class TypePromoter(minivisitor.GenericTransform):
 
         return self.handle_binop(dst_type, node)
 
+    def visit_VectorStoreNode(self, node):
+        self.visitchildren(node)
+        return node
+
     def handle_binop(self, dst_type, node):
         node.lhs = self.promote(dst_type, node.lhs)
         node.rhs = self.promote(dst_type, node.rhs)
