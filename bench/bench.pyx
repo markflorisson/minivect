@@ -370,8 +370,8 @@ cdef class MixedStridedPathological(Benchmark):
 
     #name = "a.T[:, :] = a + b.T + c + d.T + e + f.T" # assume all oeprands C contig
     name = "2D Double Precision, Mixed Strided Order\\n6 operands"
-    expr = "a_T + b + c + d + e + f"
-    orders = ['F', 'F', 'C', 'F', 'C', 'F']
+    expr = "b + c + d + e + f"
+    orders = ['F', 'F', 'C', 'F', 'C', 'C']
 
     def get_operands(self, size):
         operands = ops(size, size, self.dtype, self.orders)
@@ -390,7 +390,7 @@ cdef class MixedStridedPathological(Benchmark):
         for i in range(nouter):
             t = gettime()
             for j in range(ninner):
-                a[...] = a.T + b + c + d + e + f
+                a[...] = b + c + d + e + f
             t = gettime() - t
             times.append(t)
         return min(times)
@@ -443,7 +443,7 @@ cdef class MixedStridedPathological(Benchmark):
         for i in range(nouter):
             t = gettime()
             for j in range(ninner):
-                a[...] = a.T + b + c + d + e + f
+                a[...] = b + c + d + e + f
             t = gettime() - t
             times.append(t)
         return min(times)
