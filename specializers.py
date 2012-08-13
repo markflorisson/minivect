@@ -167,7 +167,6 @@ class Specializer(BaseSpecializer):
         super(Specializer, self).__init__(context)
         if specialization_name is not None:
             self.specialization_name = specialization_name
-
         self.variables = {}
 
     def _index_list(self, pointer, ndim):
@@ -1530,8 +1529,6 @@ def create_vectorized_specializers(specializer_cls):
     name = 'Vectorized%%d%s' % specializer_cls.__name__
     cls1 = type(name % 4, bases, dict(d, vector_size=4))
     cls2 = type(name % 8, bases, dict(d, vector_size=8))
-    cls1.specialization_name += '_vectorized_sse'
-    cls2.specialization_name += '_vectorized_avx'
     return cls1, cls2
 
 ContigSpecializer.vectorized_equivalents = (

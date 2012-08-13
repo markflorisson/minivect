@@ -9,15 +9,15 @@ subroutine aplusb_ff(a, b, size1, size2) BIND(C, name="aplusb_ff")
     a(:, :) = a + b
 end subroutine
 
-subroutine aplusb_fc(a, b, size1, size2) BIND(C, name="aplusb_fc")
+subroutine aplusb_fcf(a, b, c, size1, size2) BIND(C, name="aplusb_fcf")
     use, intrinsic :: ISO_C_BINDING
     implicit none
 
     INTEGER(C_INT), VALUE, intent(in) :: size1, size2
     REAL(C_DOUBLE), dimension(size1, size2), intent(inout) :: a
-    REAL(C_DOUBLE), dimension(size1, size2), intent(in) :: b
+    REAL(C_DOUBLE), dimension(size1, size2), intent(in) :: b, c
 
-    a(:, :) = a + transpose(b)
+    a(:, :) = transpose(b) + c
 end subroutine
 
 ! "a.T[:, :] = a + b.T + c + d.T + e + f.T" 

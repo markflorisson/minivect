@@ -19,7 +19,7 @@ except ImportError:
 
 cdef extern from "fbench.h":
     void aplusb_ff(double *, double *, int, int)
-    void aplusb_fc(double *, double *, int, int)
+    void aplusb_fcf(double *, double *, double *, int, int)
     void aplusb_cfcfcf(double *, double *, double *, double *, double *, double *, int, int, int)
     void aplusb_strided_cc(double *, double *, int, int, int)
     void aplusb_strided_fc(double *, double *, int, int, int)
@@ -62,7 +62,7 @@ cdef class Benchmark(object):
 
     xaxis = "Data Size"
 
-    def __init__(self, nouter=1, ninner=1):
+    def __init__(self, nouter=5, ninner=50):
         self.nouter = nouter
         self.ninner = ninner
 
@@ -308,10 +308,63 @@ cdef class Contig2dF(Contig2dC):
 
 cdef class MixedContig2(Contig2dF):
     name = "2D Double Precision, Mixed Contig Order"
-    orders = ['F', 'C']
+    orders = ['F', 'C', 'F']
+    expr = "b + c"
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2):
-        aplusb_fc(a, b, size1, size2)
+    def fortran(self, operands, int nouter, int ninner):
+        cdef int i, j
+        cdef double[:, :] a, b, c
+
+        cdef double *ap, *bp, *cp
+        cdef int size1, size2
+
+        a, b, c = operands
+        ap = &a[0, 0]
+        bp = &b[0, 0]
+        cp = &c[0, 0]
+        size1 = a.shape[0]
+        size2 = a.shape[1]
+
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                aplusb_fcf(ap, bp, cp, size1, size2)
+            t = gettime() - t
+            times.append(t)
+
+        return min(times)
+
+    def cython(self, operands, int nouter, int ninner):
+        cdef int i, j
+        cdef double[:, :] a, b, c
+        a, b, c = operands
+
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                a[...] = b + c
+            t = gettime() - t
+            times.append(t)
+        return min(times)
+
+    def numpy(self, operands, int nouter, int ninner):
+        cdef int i, j
+        a, b, c = operands
+
+        cdef double t
+        times = []
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                np.add(b, c, out=a)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
+
 
 cdef class MixedStridedPathological(Benchmark):
 
