@@ -1,10 +1,10 @@
 # GNU
 CC=gcc-mp-4.7
 #CFLAGS=-ftree-vectorizer-verbose=7 -std=c99 -O3
-CFLAGS=-O3 -lgfortran -g -Wall -mcpu=native -fopenmp
+CFLAGS=-O3 -lgfortran -g -Wall -mcpu=native
 
 FC=gfortran-mp-4.7
-FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native -fopenmp
+FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native
 
 # INTEL
 # CC=icc

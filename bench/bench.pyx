@@ -62,7 +62,7 @@ cdef class Benchmark(object):
 
     xaxis = "Data Size"
 
-    def __init__(self, nouter=5, ninner=50):
+    def __init__(self, nouter=1, ninner=1):
         self.nouter = nouter
         self.ninner = ninner
 
@@ -371,7 +371,7 @@ cdef class MixedStridedPathological(Benchmark):
     #name = "a.T[:, :] = a + b.T + c + d.T + e + f.T" # assume all oeprands C contig
     name = "2D Double Precision, Mixed Strided Order\\n6 operands"
     expr = "b + c + d + e + f"
-    orders = ['F', 'F', 'C', 'F', 'C', 'C']
+    orders = ['F', 'F', 'F', 'C', 'C', 'C']
 
     def get_operands(self, size):
         operands = ops(size, size, self.dtype, self.orders)

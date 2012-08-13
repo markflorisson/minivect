@@ -28,11 +28,11 @@ subroutine aplusb_cfcfcf(a, b, c, d, e, f, size1, size2, stride) BIND(C, name="a
     implicit none
 
     INTEGER(C_INT), VALUE, intent(in) :: size1, size2, stride
-    REAL(C_DOUBLE), dimension(size1 * stride, size2 * stride), intent(inout) :: a
+    REAL(C_DOUBLE), dimension(size1 * stride, size2 * stride), intent(out) :: a
     REAL(C_DOUBLE), dimension(size1 * stride, size2 * stride), intent(in) :: b, c, d, e, f
 !$omp parallel workshare
-    a(::2, ::2) = b(::2, ::2) + &
-                  transpose(c(::2, ::2)) + d(::2, ::2) + &
+    a(::2, ::2) = b(::2, ::2) + c(::2, ::2) + &
+                  transpose(d(::2, ::2)) + &
                   transpose(e(::2, ::2)) + transpose(f(::2, ::2))
 !$omp end parallel workshare
 end subroutine
