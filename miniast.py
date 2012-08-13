@@ -37,6 +37,9 @@ def make_cls(cls1, cls2):
     name = "%s_%s" % (cls1.__name__, cls2.__name__)
     return type(name, (cls1, cls2), {})
 
+data_layout =  "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64"
+target = "x86_64-apple-darwin10.0.0"
+
 class Context(object):
     """
     A context that knows how to map ASTs back and forth, how to wrap nodes
@@ -118,7 +121,10 @@ class Context(object):
                 import llvm.core as llvm_py_not_available # llvm-py not available
 
             self.llvm_module = llvm.core.Module.new('default_module')
-            self.llvm_ee = llvm.ee.ExecutionEngine.new(self.llvm_module)
+            # self.llvm_ee = llvm.ee.ExecutionEngine.new(self.llvm_module)
+            self.llvm_ee = llvm.ee.EngineBuilder.new(self.llvm_module).force_jit().opt(3).create()
+            # self.llvm_module.data_layout = data_layout
+            # self.llvm_module.target = target
             self.llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
             self.llvm_fpm.initialize()
             if not self.debug:
@@ -201,9 +207,30 @@ class Context(object):
 
     def llvm_passes(self):
         "Returns a list of LLVM optimization passes"
+        return []
         return [
+            # llvm.passes.PASS_CFG_SIMPLIFICATION
+            llvm.passes.PASS_BLOCK_PLACEMENT,
+            llvm.passes.PASS_BASIC_ALIAS_ANALYSIS,
+            llvm.passes.PASS_NO_AA,
+            llvm.passes.PASS_SCALAR_EVOLUTION_ALIAS_ANALYSIS,
+#            llvm.passes.PASS_ALIAS_ANALYSIS_COUNTER,
+            llvm.passes.PASS_AAEVAL,
+            llvm.passes.PASS_LOOP_DEPENDENCE_ANALYSIS,
+            llvm.passes.PASS_BREAK_CRITICAL_EDGES,
+            llvm.passes.PASS_LOOP_SIMPLIFY,
             llvm.passes.PASS_PROMOTE_MEMORY_TO_REGISTER,
+            llvm.passes.PASS_CONSTANT_PROPAGATION,
+            llvm.passes.PASS_LICM,
+            # llvm.passes.PASS_CONSTANT_MERGE,
+            llvm.passes.PASS_LOOP_STRENGTH_REDUCE,
+            llvm.passes.PASS_LOOP_UNROLL,
+            # llvm.passes.PASS_FUNCTION_ATTRS,
+            # llvm.passes.PASS_GLOBAL_OPTIMIZER,
+            # llvm.passes.PASS_GLOBAL_DCE,
             llvm.passes.PASS_DEAD_CODE_ELIMINATION,
+            llvm.passes.PASS_INSTRUCTION_COMBINING,
+            llvm.passes.PASS_CODE_GEN_PREPARE,
         ]
 
     def mangle_function_name(self, name):
@@ -645,8 +672,7 @@ class ASTBuilder(object):
         """
         if type is None:
             type = self._infer_type(value)
-        if type.is_c_string:
-            value = value.encode('string-escape')
+
         return ConstantNode(self.pos, type, value)
 
     def variable(self, type, name):

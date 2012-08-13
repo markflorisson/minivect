@@ -143,6 +143,14 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         return node
 
     def _hoist_binop_operands(self, b, node):
+        if not node.lhs.hoistable or not node.rhs.hoistable:
+            if node.lhs.hoistable:
+                node.lhs = self.hoist(node.lhs)
+            else:
+                node.rhs = self.hoist(node.rhs)
+
+            return node
+
         lhs_hoisting_level = self.hoisting_level(node.lhs)
         rhs_hoisting_level = self.hoisting_level(node.rhs)
 
@@ -245,6 +253,7 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
             for_loop = self.function.for_loops[hoisting_level]
 
         temp = b.temp(node.type.dtype, name='hoisted_temp')
+        temp.broadcasting = None
 
         # TODO: keep track of the variables
         for variable in self.treepath(node, '//Variable'):

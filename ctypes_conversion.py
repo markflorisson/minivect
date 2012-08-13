@@ -67,3 +67,6 @@ def get_ctypes_func(func, llvm_func, llvm_execution_engine, context):
 def get_data_pointer(numpy_array, array_type):
     dtype_pointer = array_type.dtype.pointer()
     return numpy_array.ctypes.data_as(convert_to_ctypes(dtype_pointer))
+
+def get_pointer(context, llvm_func):
+    return context.llvm_ee.get_pointer_to_function(llvm_func)

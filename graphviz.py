@@ -30,7 +30,7 @@ class GraphvizGenerator(minivisitor.PrintTree):
 
     def create_node(self, node):
         "Create a graphviz node from the miniast node"
-        label = '"%s"' % self.format_node(node)
+        label = '"%s"' % self.format_node(node, want_type_info=False)
         self.counter += 1
         pydot_node = pydot.Node(str(self.counter), label=label)
         self.add_node(pydot_node)

@@ -41,7 +41,15 @@ def build_vars(*types):
     return [b.variable(type, 'op%d' % i) for i, type in enumerate(types)]
 
 def build_function(variables, body, name=None):
-    return context.astbuilder.build_function(variables, body, name)
+    qualify = lambda type: type.qualify("const", "restrict")
+    func = context.astbuilder.build_function(variables, body, name)
+    func.shape.type = qualify(func.shape.type)
+    for arg in func.arguments:
+        if arg.type.is_array:
+            arg.data_pointer.type = qualify(arg.data_pointer.type)
+            arg.strides_pointer.type = qualify(arg.strides_pointer.type)
+
+    return func
 
 def toxml(function):
     return xmldumper.XMLDumper(context).visit(function)

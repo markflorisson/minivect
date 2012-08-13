@@ -323,7 +323,7 @@ class CCodeGen(CodeGen):
 
     def visit_ConstantNode(self, node):
         if node.type.is_c_string:
-            return '"%s"' % node.value
+            return '"%s"' % node.value.encode('string-escape')
         return str(node.value)
 
     def visit_ErrorHandler(self, node):

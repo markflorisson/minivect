@@ -23,7 +23,7 @@ class LLVMCodeGen(codegen.CodeGen):
         self.temp_names = set()
 
         self.astbuilder = context.astbuilder
-        self.blocks = {}
+        self.blocks = []
         self.symtab = {}
         self.llvm_temps = {}
 
@@ -35,8 +35,30 @@ class LLVMCodeGen(codegen.CodeGen):
     def append_basic_block(self, name='unamed'):
         idx = len(self.blocks)
         bb = self.lfunc.append_basic_block('%s_%d' % (name, idx))
-        self.blocks[idx] = bb
+        self.blocks.append(bb)
         return bb
+
+    def optimize(self):
+        llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
+        for llvm_pass in self.context.llvm_passes():
+            llvm_fpm.add(llvm_pass)
+
+        llvm_fpm.initialize()
+        llvm_fpm.run(self.lfunc)
+        llvm_fpm.finalize()
+
+        # self.context.llvm_fpm.run(self.lfunc)
+
+    def optimize(self):
+        llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
+        # target_data = llvm.ee.TargetData(self.context.llvm_ee)
+        llvm_fpm.add(self.context.llvm_ee.target_data)
+        pmb = llvm.passes.PassManagerBuilder.new()
+        pmb.opt_level = 3
+        pmb.vectorize = True
+
+        pmb.populate(llvm_fpm)
+        llvm_fpm.run(self.lfunc)
 
     def visit_FunctionNode(self, node):
         self.specializer = node.specializer
@@ -49,13 +71,16 @@ class LLVMCodeGen(codegen.CodeGen):
         lfunc_type = node.type.to_llvm(self.context)
         self.lfunc = self.llvm_module.add_function(lfunc_type, node.mangled_name)
 
-        entry = self.append_basic_block('entry')
-        self.builder = llvm.core.Builder.new(entry)
+        self.entry_bb = self.append_basic_block('entry')
+        self.builder = llvm.core.Builder.new(self.entry_bb)
 
         self.add_arguments(node)
         self.visit(node.body)
 
-        # self.context.llvm_fpm.run(self.lfunc)
+        self.lfunc.verify()
+        self.optimize()
+        # print self.lfunc
+
         self.code.write(self.lfunc)
         ctypes_func = ctypes_conversion.get_ctypes_func(
                     node, self.lfunc, self.context.llvm_ee, self.context)
@@ -65,7 +90,10 @@ class LLVMCodeGen(codegen.CodeGen):
         i = 0
         for arg in function.arguments + function.scalar_arguments:
             for var in arg.variables:
-                self.symtab[var.name] = self.lfunc.args[i]
+                llvm_arg = self.lfunc.args[i]
+                self.symtab[var.name] = llvm_arg
+                llvm_arg.add_attribute(llvm.core.ATTR_NO_ALIAS)
+                llvm_arg.add_attribute(llvm.core.ATTR_NO_CAPTURE)
                 i += 1
 
     def visit_PrintNode(self, node):
@@ -288,8 +316,12 @@ class LLVMCodeGen(codegen.CodeGen):
         if node not in self.declared_temps:
             self._mangle_temp(node)
 
+        bb = self.builder.basic_block
+        self.builder.position_at_beginning(self.entry_bb)
         llvm_temp = self.builder.alloca(node.type.to_llvm(self.context),
                                         node.name)
+        self.builder.position_at_end(bb)
+
         self.llvm_temps[node] = llvm_temp
         return llvm_temp
 

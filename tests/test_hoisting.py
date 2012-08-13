@@ -32,18 +32,20 @@ def test_hoist():
 def test_hoist_3d():
     """
     >>> test_hoist_3d()
-
     """
-    type1 = double[:, :, :]
-    type2 = double[:, :, :]
-    type3 = double[:, :, :]
+    type1 = npy_intp[:, :, :]
+    type2 = npy_intp[:, :, :]
+    type3 = npy_intp[:, :, :]
     type1.broadcasting = (False, True, True)
     type2.broadcasting = (True, False, True)
     type3.broadcasting = (True, True, False)
 
-    out_type = double[:, :, :]
+    out_type = npy_intp[:, :, :]
 
     out, var1, var2, var3 = vars = build_vars(out_type, type1, type2, type3)
+    #v1 = b.mul(var1, var2)
+    #v2 = b.mul(var2, var2)
+    #v3 = b.mul(var3, var3)
     expr = b.mul(b.mul(var1, var2), var3)
     body = b.assign(out, expr)
     func = build_function(vars, body)

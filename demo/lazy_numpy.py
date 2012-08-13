@@ -1,4 +1,10 @@
+"""
+Minimal library for lazy evaluation with NumPy. Uses minivect's LLVM backend
+for evaluation.
+"""
+
 import sys
+import time
 
 import numpy as np
 
@@ -8,9 +14,9 @@ import minitypes
 import codegen
 import xmldumper
 import treepath
-from ctypes_conversion import get_data_pointer, convert_to_ctypes
+from ctypes_conversion import get_data_pointer, convert_to_ctypes, get_pointer
 
-context_debug = True
+context_debug = 0
 
 class LazyLLVMContext(miniast.LLVMContext):
     debug = context_debug
@@ -38,6 +44,10 @@ def specialize_c(specializer_cls, ast):
 
 
 class Lazy(object):
+    """
+    Base class for lazy objects. We do not build a minivect AST immediately
+    since we need to support our operator overloads.
+    """
 
     def __init__(self, parent=None):
         self.parent = parent
@@ -53,26 +63,29 @@ class Lazy(object):
         func = b.build_function(variables, body, 'lazy%d' % func_counter,
                                 shapevar=shapevar)
 
-        specializer = specializers.ContigSpecializer
+        # TODO: select an appropriate specializer
+        # specializer = specializers.ContigSpecializer
+        specializer = specializers.StridedCInnerContigSpecializer
 
         specialized_func, (llvm_func, ctypes_func) = specialize(specializer, func)
         func_counter += 1
 
         # print specialize_c(specializer, func)[1]
         # print specialized_func.print_tree(context)
-        # print llvm_func
+        print llvm_func
 
-        return ctypes_func, variables, specializer
+        return ctypes_func, variables, specializer, llvm_func
 
-    def eval(self):
-        ctypes_func, variables, specializer = self.map()
+    def getfunc(self):
+        ctypes_func, variables, specializer, llvm_func = self.map()
 
         fist_array = variables[0].value
         shape = fist_array.shape
         for variable in variables:
-            if variable.value.shape != shape:
-                raise NotImplementedError("broadcasting (%s, %s)" %
-                                                (shape, variable.value.shape))
+            for dim, extent in enumerate(variable.value.shape):
+                if extent != shape[dim] and extent != 1:
+                    raise ValueError("Differing extents in dim %d (%s, %s)" %
+                                                    (dim, extent, shape[dim]))
 
         args = [fist_array.ctypes.shape]
         for variable in variables:
@@ -85,10 +98,25 @@ class Lazy(object):
             else:
                 raise NotImplementedError
 
+        return ctypes_func, args
+
+    def getpointer(self):
+        ctypes_func, variables, specializer, llvm_func = self.map()
+        return get_pointer(context, llvm_func)
+
+    def eval(self):
+        ctypes_func, args = self.getfunc()
         return ctypes_func(*args)
 
     def __add__(self, other):
         return Binop("+", self, lazy_array(other))
+
+    def __mul__(self, other):
+        return Binop("*", self, lazy_array(other))
+
+    def __div__(self, other):
+        return Binop("/", self, lazy_array(other))
+
 
 class Binop(Lazy):
 
@@ -100,7 +128,7 @@ class Binop(Lazy):
 
     def _map(self, variables):
         lhs, rhs = self.lhs._map(variables), self.rhs._map(variables)
-        assert lhs.type == rhs.type # no promotion
+        assert lhs.type == rhs.type, (self.op, lhs.type, rhs.type) # no promotion
 
         if self.op == '=':
             return b.assign(lhs, rhs)
@@ -115,23 +143,34 @@ class LazyArray(Lazy):
     def _map(self, variables):
         minidtype = minitypes.map_dtype(self.numpy_array.dtype)
         array_type = minidtype[(slice(None),) * self.numpy_array.ndim]
+        array_type.broadcasting = tuple(
+                        extent == 1 for extent in self.numpy_array.shape)
         variable = b.variable(array_type, 'op%d' % len(variables))
         variables.append(variable)
         variable.value = self.numpy_array
         return variable
 
     def __setitem__(self, item, value):
-        if not isinstance(item, tuple):
-            item = (item,)
+        if item is not Ellipsis:
+            if not isinstance(item, tuple):
+                item = (item,)
 
-        for s in item:
-            if not isinstance(s, slice):
-                raise NotImplementedError("Only full slices are supported")
-            elif s.start is not None or s.stop is not None or s.step is not None:
-                raise NotImplementedError("Only full slice assignment is supported")
+            for s in item:
+                if not isinstance(s, slice):
+                    raise NotImplementedError("Only full slices are supported")
+                elif s.start is not None or s.stop is not None or s.step is not None:
+                    raise NotImplementedError("Only full slice assignment is supported")
 
         lazy_result = Binop('=', self, value)
         return lazy_result.eval()
+
+    def slice_assign(self, src):
+        lazy_result = Binop('=', self, src)
+        t = time.time()
+        ctypes_func, args = lazy_result.getfunc()
+        t = time.time() - t
+        print 'compilation time:', t
+        return ctypes_func, args
 
 def lazy_array(numpy_array):
     if isinstance(numpy_array, Lazy):
@@ -157,7 +196,41 @@ def test():
     lazy_a[:, :] = lazy_a + lazy_a
     print a
 
+def test2():
+    N = 200
+    i, j, k = np.ogrid[:N, :N, :N]
+    dtype = np.double
+    i, j, k = i.astype(dtype), j.astype(dtype), k.astype(dtype)
+
+    numpy_result = np.empty((N, N, N), dtype=dtype)
+
+    t = time.time()
+    numpy_result[...] = i * j * k
+    print time.time() - t
+
+    our_result = np.empty((N, N, N), dtype=dtype)
+
+    # Lazy evaluation slice assignment
+#    t = time.time()
+    lazy_dst = lazy_array(our_result)
+    lazy_i, lazy_j, lazy_k = lazy_array(i), lazy_array(j), lazy_array(k)
+#    lazy_dst[...] = lazy_i * lazy_j * lazy_k
+#    print time.time() - t
+#
+#    assert np.all(numpy_result == our_result)
+
+    # Lazy evaluation with compilation separate from timing
+    f, a = lazy_dst.slice_assign(lazy_i * lazy_j * lazy_k)
+    t = time.time()
+    for i in range(10):
+        f(*a)
+    print time.time() - t
+
+
+    # assert np.all(numpy_result == our_result)
+
 if __name__ == '__main__':
-    test()
+    # test()
+    test2()
     #import doctest
     #doctest.testmod()
