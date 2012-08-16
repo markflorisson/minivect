@@ -17,19 +17,22 @@ except ImportError:
     print "numexpr not found"
     numexpr = None
 
+ctypedef float dtype_t
+precision = "Single"
+
 cdef extern from "fbench.h":
-    void aplusb_ff(double *, double *, int, int)
-    void aplusb_fcf(double *, double *, double *, int, int)
-    void aplusb_cfcfcf(double *, double *, double *, double *, double *, double *, int, int, int)
-    void aplusb_strided_cc(double *, double *, int, int, int)
-    void aplusb_strided_fc(double *, double *, int, int, int)
-    void innercontig2d(double *, double *, double *, double *, int, int, int)
+    void aplusb_ff(dtype_t *, dtype_t *, int, int)
+    void aplusb_fcf(dtype_t *, dtype_t *, dtype_t *, int, int)
+    void aplusb_cfcfcf(dtype_t *, dtype_t *, dtype_t *, dtype_t *, dtype_t *, dtype_t *, int, int, int)
+    void aplusb_strided_cc(dtype_t *, dtype_t *, int, int, int)
+    void aplusb_strided_fc(dtype_t *, dtype_t *, int, int, int)
+    void innercontig2d(dtype_t *, dtype_t *, dtype_t *, dtype_t *, int, int, int)
 
 
 # ctypedef fused dtype_t:
 #     int
 #     float
-#     double
+#     dtype_t
 
 DEF numpy_name = 'NumPy'
 DEF cython_name = 'Cython'
@@ -37,7 +40,6 @@ DEF numexpr_name = 'NumExpr'
 DEF numexpr_threaded = 'NumExpr 4 Threads'
 DEF fortran_name = 'Fortran'
 
-ctypedef double dtype_t
 
 cdef inline double gettime():
     return time.time()
@@ -55,14 +57,14 @@ cdef class Benchmark(object):
 
     cdef int nouter
     cdef int ninner
-    dtype = np.double
+    dtype = np.float32
     names = string.ascii_letters
     sizes = [400, 800, 1200, 1600, 2000, 2400]
     strides = None
 
     xaxis = "Data Size"
 
-    def __init__(self, nouter=1, ninner=1):
+    def __init__(self, nouter=5, ninner=50):
         self.nouter = nouter
         self.ninner = ninner
 
@@ -137,7 +139,7 @@ cdef class Benchmark(object):
         self.dumpfile(d, out)
 
     def title(self, size_to_times):
-        return self.name
+        return self.name.replace('Double', precision)
 
     def _title(self, size_to_times):
         order = self.orders[0]
@@ -245,7 +247,7 @@ cdef class Contig2dC(Benchmark):
 
     def cython(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b
+        cdef dtype_t[:, :] a, b
         a, b = operands
 
         cdef double t
@@ -278,9 +280,9 @@ cdef class Contig2dF(Contig2dC):
 
     def fortran(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b
+        cdef dtype_t[:, :] a, b
 
-        cdef double *ap, *bp
+        cdef dtype_t *ap, *bp
         cdef int size1, size2
 
         a, b = operands
@@ -300,7 +302,7 @@ cdef class Contig2dF(Contig2dC):
 
         return min(times)
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2):
+    cdef _fortran(self, dtype_t *a, dtype_t *b, int size1, int size2):
         aplusb_ff(a, b, size1, size2)
 
 # cdef class MixedContig(Contig2dC):
@@ -313,9 +315,9 @@ cdef class MixedContig2(Contig2dF):
 
     def fortran(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c
+        cdef dtype_t[:, :] a, b, c
 
-        cdef double *ap, *bp, *cp
+        cdef dtype_t *ap, *bp, *cp
         cdef int size1, size2
 
         a, b, c = operands
@@ -338,7 +340,7 @@ cdef class MixedContig2(Contig2dF):
 
     def cython(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c
+        cdef dtype_t[:, :] a, b, c
         a, b, c = operands
 
         cdef double t
@@ -411,10 +413,10 @@ cdef class MixedStridedPathological(Benchmark):
 
     def fortran(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c, d, e, f
+        cdef dtype_t[:, :] a, b, c, d, e, f
 
         a, b, c, d, e, f = operands
-        cdef double *ap, *bp, *cp, *dp, *ep, *fp
+        cdef dtype_t *ap, *bp, *cp, *dp, *ep, *fp
         ap = &a[0, 0]; bp = &b[0, 0]; cp = &c[0, 0]; dp = &d[0, 0]; ep =  &e[0, 0]; fp = &f[0, 0]
         cdef int size1 = a.shape[0]
         cdef int size2 = a.shape[1]
@@ -429,13 +431,13 @@ cdef class MixedStridedPathological(Benchmark):
             times.append(t)
         return min(times)
 
-    cdef _fortran(self, double *a, double *b, double *c, double *d, double *e, double *f,
+    cdef _fortran(self, dtype_t *a, dtype_t *b, dtype_t *c, dtype_t *d, dtype_t *e, dtype_t *f,
                         int size1, int size2):
         aplusb_cfcfcf(a, b, c, d, e, f, size1, size2, 2)
 
     def cython(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c, d, e, f
+        cdef dtype_t[:, :] a, b, c, d, e, f
         a, b, c, d, e, f = operands
 
         cdef double t
@@ -492,14 +494,14 @@ cdef class Strided(Contig2dF):
 
         return operands
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2):
+    cdef _fortran(self, dtype_t *a, dtype_t *b, int size1, int size2):
         aplusb_strided_cc(a, b, size1, size2, self.stride)
 
 cdef class MixedStrided(Strided):
     name = "2D Double Precision, Strided, Mixed Order"
     orders = ['F', 'C']
 
-    cdef _fortran(self, double *a, double *b, int size1, int size2):
+    cdef _fortran(self, dtype_t *a, dtype_t *b, int size1, int size2):
         aplusb_strided_fc(a, b, size1, size2, self.stride)
 
 cdef class InnerContig(Benchmark):
@@ -533,11 +535,11 @@ cdef class InnerContig(Benchmark):
 
     def fortran(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c, d
+        cdef dtype_t[:, :] a, b, c, d
 
         a, b, c, d = operands
 
-        cdef double *ap, *bp, *cp, *dp
+        cdef dtype_t *ap, *bp, *cp, *dp
         ap = &a[0, 0]; bp = &b[0, 0]; cp = &c[0, 0]; dp = &d[0, 0]
         cdef int size1 = a.shape[0]
         cdef int size2 = a.shape[1]
@@ -552,12 +554,12 @@ cdef class InnerContig(Benchmark):
             times.append(t)
         return min(times)
 
-    cdef _fortran(self, double *a, double *b, double *c, double *d, int size1, int size2):
+    cdef _fortran(self, dtype_t *a, dtype_t *b, dtype_t *c, dtype_t *d, int size1, int size2):
         innercontig2d(a, b, c, d, size1, size2, 2)
 
     def cython(self, operands, int nouter, int ninner):
         cdef int i, j
-        cdef double[:, :] a, b, c, d
+        cdef dtype_t[:, :] a, b, c, d
         a, b, c, d = operands
 
         cdef double t
