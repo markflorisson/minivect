@@ -16,6 +16,11 @@ try:
 except ImportError:
     print "numexpr not found"
     numexpr = None
+try:
+    import theano
+except ImportError:
+    print "theano not found"
+    theano = None
 
 ctypedef float dtype_t
 precision = "Single"
@@ -37,6 +42,7 @@ cdef extern from "fbench.h":
 DEF numpy_name = 'NumPy'
 DEF cython_name = 'Cython'
 DEF numexpr_name = 'NumExpr'
+DEF theano_name = 'Theano'
 DEF numexpr_threaded = 'NumExpr 4 Threads'
 DEF fortran_name = 'Fortran'
 
@@ -50,6 +56,24 @@ def ops(size1, size2, dtype, orders):
         a = np.arange(size1 * size2, dtype=dtype).reshape(size1, size2, order=order)
         arrays.append(a)
     return arrays
+
+def theano_compile(expr, d):
+    """
+    This compile a Theano function from string "expr"
+    and a dict of local variable "d".
+    """
+    e = "out = " + expr
+    d = d.copy()
+    for k, v in d.iteritems():
+        if isinstance(v, np.ndarray):
+            d[k] = theano.shared(v, borrow=True)
+    exec e in {}, d
+    f = theano.function([],
+                        #Tell Theano that it can reuse previously memory region
+                        #This make theano allocate only the first time the output
+                        theano.Out(d['out'], borrow=True))
+
+    return f
 
 cdef class Benchmark(object):
     name = None
@@ -127,6 +151,11 @@ cdef class Benchmark(object):
             self.numexpr(self.expr, numexpr_dict, 1, 1)
             times[numexpr_threaded] = self.numexpr(self.expr, numexpr_dict, nouter, ninner)
 
+        if theano is not None:
+            theano_dict = dict(zip(self.names, operands))
+            self.theano(self.expr, theano_dict, 1, 1)
+            times[theano_name] = self.theano(self.expr, theano_dict, nouter, ninner)
+
         return times
 
     def run(self, out):
@@ -184,6 +213,8 @@ cdef class Benchmark(object):
         columns.extend([cython_name, numpy_name])
         if numexpr is not None:
             columns.extend((numexpr_name, numexpr_threaded))
+        if theano is not None:
+            columns.append(theano_name)
 
         f.write('"%s" %s\n' % (self.xaxis,
                                " ".join('"%s"' % col for col in columns)))
@@ -222,6 +253,26 @@ cdef class Benchmark(object):
             t = gettime()
             for j in range(ninner):
                 numexpr.evaluate(expr, d, out=out)
+            t = gettime() - t
+            times.append(t)
+        return min(times)
+
+    def theano(self, expr, d, int nouter, int ninner):
+        cdef int i, j
+
+        cdef double t
+        times = []
+        #out = d['a']
+        #We can't give Theano the output memory
+        #but theano_compile compile the theano function
+        #in such a way that it will allocate the output only at the first call.
+        f = theano_compile(expr, d)
+        #call it first to force the allocation of the output
+        f()
+        for i in range(nouter):
+            t = gettime()
+            for j in range(ninner):
+                f()
             t = gettime() - t
             times.append(t)
         return min(times)

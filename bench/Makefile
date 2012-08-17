@@ -1,11 +1,12 @@
 # GNU
 CC=gcc-mp-4.7
 #CFLAGS=-ftree-vectorizer-verbose=7 -std=c99 -O3
-CFLAGS=-O3 -lgfortran -g -Wall -mcpu=native
+CFLAGS=-O3 -lgfortran -g -Wall -march=native -fPIC
 
 FC=gfortran-mp-4.7
-FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native
+FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native -fPIC
 
+CYTHON=`which cython`
 # INTEL
 # CC=icc
 # CFLAGS=-O3
@@ -29,11 +30,11 @@ all: cy
 	$(PY) -c 'import bench; bench.run()'
 
 new:
-	$(PY) `which cython` bench.pyx
+	$(PY) $(CYTHON) bench.pyx
 	make
 
 cy: fbench
-	$(PY) `which cython` bench.pyx
+	$(PY) $(CYTHON) bench.pyx
 	CC=$(CC) LD="$(LD)" LDFLAGS="$(LDFLAGS)" CFLAGS="$(CFLAGS)" $(BUILD_PY) setup.py build_ext --inplace
 
 fbench:
