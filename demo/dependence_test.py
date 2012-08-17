@@ -234,6 +234,9 @@ def direction_vector(a, b):
     >>> direction_vector(a[::2, 1:5], a[8::-2, 2:6])
     ('*', '<')
     """
+    if not overlap(a, b):
+        return False
+
     assert a.shape == b.shape
 
     base = a
