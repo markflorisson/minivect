@@ -1,11 +1,11 @@
 program main
+    use omp_lib
     implicit none
 
     integer, parameter :: N = 200
     double precision, dimension(N) :: a, b, c
     double precision :: output(N, N, N)
     integer :: i, j, k
-    double precision :: t(N, N)
     integer :: bounds(6)
     double precision :: t
     integer :: P(2, 2)
@@ -41,15 +41,13 @@ program main
     !end do
 
     t = omp_get_wtime()
-    do i = 1, 100
-        output(:, :, :) = spread(spread(a, bound(1), N), bound(2), N) &
-                               * spread(spread(b, bound(3), N), bound(4), N) &
-                              * spread(spread(c, bound(5), N), bound(6), N)
+    do i = 1, 10
+        output(:, :, :) = spread(spread(a, bound(1), N), bound(2), N) * &
+                                 spread(spread(b, bound(3), N), bound(4), N) * &
+                                 spread(spread(c, bound(5), N), bound(6), N)
     end do
     t = omp_get_wtime() - t
     print *, t
-
-
 
 contains
     integer function bound(i)

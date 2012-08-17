@@ -8,15 +8,15 @@ FFLAGS=-O3 -fno-underscoring -fno-second-underscore -g -Wall -march=native -fPIC
 
 CYTHON=`which cython`
 # INTEL
-# CC=icc
-# CFLAGS=-O3
-# 
-# FC=ifort
-# FFLAGS=-O3 -nofor_main
-# 
-# LD=ifort #cc
-# #LDFLAGS=-L/exports/applications/apps/SL5/intel/Compiler/11.0/081/lib/intel64/ -lifcore -limf
-# LDFLAGS=-L/exports/applications/apps/intel/ClusterStudio2011/lib/intel64 -lifcore -limf
+CC=icc
+CFLAGS=-O3 -openmp
+
+FC=ifort
+FFLAGS=-O3 -nofor_main -openmp
+
+LD=ifort #cc
+#LDFLAGS=-L/exports/applications/apps/SL5/intel/Compiler/11.0/081/lib/intel64/ -lifcore -limf
+LDFLAGS=-L/opt/intel/lib -L/exports/applications/apps/intel/ClusterStudio2011/lib/intel64 -lifcore -limf -liomp5
 
 # NAGFOR (http://www.nag.com/nagware/np/r53_doc/nagfor.html)
 # FC=nagfor
