@@ -27,7 +27,7 @@ PY=python2.7
 BUILD_PY=python2.7
 
 all: cy
-	$(PY) -c 'import bench; bench.run()'
+	OMP_NUM_THREADS=4 $(PY) -c 'import bench; bench.run()'
 
 new:
 	$(PY) $(CYTHON) bench.pyx
