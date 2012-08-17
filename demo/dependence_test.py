@@ -203,6 +203,15 @@ def siv(base, a, b, offsets_a, steps_a, offsets_b, steps_b):
         elif distance % fractions.gcd(step_a, step_b) != 0:
             # independence
             return None
+        elif abs(step_a) == abs(step_b):
+            # Weak crossing SIV test
+            i = distance / (2*step_a)
+            if i % 0.5 == 0 and 0 <= i < extent:
+                # dependence
+                direction_vector.append('*')
+            else:
+                # independence
+                return None
         else:
             # possible dependence, further checking is needed (try banerjee). Remain conservative
             direction_vector.append('*')
