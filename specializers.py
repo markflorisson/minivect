@@ -908,6 +908,7 @@ class VectorizingSpecializer(Specializer):
     def can_vectorize(cls, context, ast):
         visitor = cls.can_vectorize_visitor(context)
         visitor.visit(ast)
+        # print visitor.can_vectorize, ast.pos
         return visitor.can_vectorize
 
     @visit_if_should_vectorize
