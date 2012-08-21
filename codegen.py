@@ -147,7 +147,7 @@ class CCodeGen(CodeGen):
         if node.privates:
             privates = " private(%s)" % ", ".join(self.results(node.privates))
 
-        pragma = "#pragma omp parallel for if(%s) lastprivate(%s)%s default(none)"
+        pragma = "#pragma omp parallel for if(%s) lastprivate(%s)%s"
         self.code.putln(pragma % (if_clause, lastprivates, privates))
         self.code.putln("#endif")
         self.visit(node.for_node)
