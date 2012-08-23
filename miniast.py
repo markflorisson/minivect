@@ -27,6 +27,7 @@ except ImportError:
     llvm = None
 
 class UndocClassAttribute(object):
+    "Use this to document class attributes for Sphinx"
     def __init__(self, cls):
         self.cls = cls
 
@@ -34,11 +35,9 @@ class UndocClassAttribute(object):
         return self.cls(*args, **kwargs)
 
 def make_cls(cls1, cls2):
+    "Fuse two classes together."
     name = "%s_%s" % (cls1.__name__, cls2.__name__)
     return type(name, (cls1, cls2), {})
-
-data_layout =  "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64"
-target = "x86_64-apple-darwin10.0.0"
 
 class Context(object):
     """
@@ -123,8 +122,6 @@ class Context(object):
             self.llvm_module = llvm.core.Module.new('default_module')
             # self.llvm_ee = llvm.ee.ExecutionEngine.new(self.llvm_module)
             self.llvm_ee = llvm.ee.EngineBuilder.new(self.llvm_module).force_jit().opt(3).create()
-            # self.llvm_module.data_layout = data_layout
-            # self.llvm_module.target = target
             self.llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
             self.llvm_fpm.initialize()
             if not self.debug:
