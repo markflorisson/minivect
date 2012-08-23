@@ -87,6 +87,12 @@ class Context(object):
         functionality. This class should likely participate
         cooperatively in MI.
 
+    .. attribute:: variable_resolving_mixin_cls
+
+        A specializer mixin class that resolves wrapped miniasts in a foreign
+        AST. This is only needed if you are using :py:class:`NodeWrapper`,
+        which wraps a miniast somewhere at the leaves.
+
     .. attribute: graphviz_cls
 
         Visitor to generate a Graphviz graph. See the :py:module:`graphviz`
