@@ -1,7 +1,7 @@
 """
-This module provides the AST. Subclass Context and override the various
-methods to allow minivect visitors over the AST, to promote and map types,
-etc. Subclass and override ASTBuilder's method to provide alternative
+This module provides the AST. Subclass :py:class:`Context` and override the
+various methods to allow minivect visitors over the AST, to promote and map types,
+etc. Subclass and override :py:class:`ASTBuilder`'s methods to provide alternative
 AST nodes or different implementations.
 """
 
@@ -1090,7 +1090,7 @@ class ForNode(Node):
         self.appending_stats = []
 
 class IfNode(Node):
-    "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_"
+    "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_`"
 
     child_attrs = ['cond', 'body', 'else_body']
 
@@ -1099,7 +1099,7 @@ class IfNode(Node):
 
 class StatListNode(Node):
     """
-    A node to wrap multiple statements, see :py:class:`ASTBuilder.stats
+    A node to wrap multiple statements, see :py:class:`ASTBuilder.stats`
     """
     child_attrs = ['stats']
     is_statlist = True

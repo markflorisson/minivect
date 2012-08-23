@@ -24,6 +24,13 @@ minivect Package
     :members:
     :show-inheritance:
 
+:mod:`type_promoter` Module
+--------------------------
+
+.. automodule:: minivect.type_promoter
+    :members:
+    :show-inheritance:
+
 :mod:`minitypes` Module
 -----------------------
 
@@ -52,6 +59,19 @@ minivect Package
     :members:
     :show-inheritance:
 
+:mod:`llvm_codegen` Module
+---------------------
+
+.. automodule:: minivect.llvm_codegen
+    :members:
+    :show-inheritance:
+
+:mod:`ctypes_conversion` Module
+---------------------
+
+.. automodule:: minivect.ctypes_conversion
+    :members:
+    :show-inheritance:
 
 :mod:`minicode` Module
 ----------------------
@@ -59,6 +79,22 @@ minivect Package
 .. automodule:: minivect.minicode
     :members:
     :show-inheritance:
+
+:mod:`graphviz` Module
+----------------------
+
+.. automodule:: minivect.graphviz
+    :members:
+    :show-inheritance:
+
+:mod:`xmldumper` Module
+----------------------
+
+.. automodule:: minivect.xmldumper
+    :members:
+    :show-inheritance:
+
+
 
 :mod:`minierror` Module
 -----------------------

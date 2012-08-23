@@ -1,7 +1,7 @@
 """
 Specializers for various sorts of data layouts and memory alignments.
 
-These specializers operate on a copy of the simplified vector expression
+These specializers operate on a copy of the simplified array expression
 representation (i.e., one with an NDIterate node). This node is replaced
 with one or several ForNode nodes in a specialized order.
 
@@ -290,6 +290,10 @@ class FinalSpecializer(BaseSpecializer):
         self.vector_temps = {}
 
     def run_optimizations(self, node):
+        """
+        Run any optimizations on the AST. Currently only loop-invariant code
+        motion is implemented when broadcasting information is present.
+        """
         import optimize
 
         # TODO: support vectorized specializations
@@ -303,8 +307,9 @@ class FinalSpecializer(BaseSpecializer):
 
     def visit_Variable(self, node):
         """
-        Process variables. For arrays, this means retrieving the element
-        from the array through a call to self._element_location().
+        Process variables, which includes arrays and scalars. For arrays,
+        this means retrieving the element from the array. Performs strength
+        reduction for index calculation of array variables.
         """
         if node.type.is_array:
             tiled = self.sp.is_tiled_specializer
@@ -319,14 +324,19 @@ class FinalSpecializer(BaseSpecializer):
 
             contig = self.sp.is_contig_specializer
 
+            # Get the array data pointer
             arg_data_pointer = self.function.args[node.name].data_pointer
             if self.sp.is_contig_specializer:
+                # Contiguous, no strength reduction needed
                 data_pointer = arg_data_pointer
             else:
+                # Compute strength reduction pointers for all dimensions leading
+                # up the the dimension this variable occurs in.
                 self.compute_temp_strides(node, inner_contig, tiled=tiled)
                 data_pointer = self.compute_data_pointer(
                             node, arg_data_pointer, inner_contig, tiled)
 
+            # Get the loop level corresponding to the occurrence of the variable
             for_node = self.function.for_loops[self.loop_level - 1]
 
             if self.should_vectorize:
@@ -342,19 +352,23 @@ class FinalSpecializer(BaseSpecializer):
             return node
 
     def visit_VectorVariable(self, vector_variable):
+        # use visit_Variable, since is does the strength reduction and such
         return self.visit_Variable(vector_variable.variable)
 
     def element_location(self, data_pointer, for_node,
                          inner_contig, is_contig, tiled):
+        "Return the element in the array for the current index set"
         if inner_contig or is_contig:
-            # contiguous access
+            # contiguous access, index the data pointer in the inner dimension
             return self.astbuilder.index(data_pointer, for_node.index)
         else:
-            # strided access
+            # strided access, this dimension is performing strength reduction,
+            # so we just need to dereference the data pointer
             return self.astbuilder.dereference(data_pointer)
 
     def handle_vector_variable(self, variable, data_pointer, for_node,
                                inner_contig, is_contig):
+        "Same as `element_location`, except for Vector variables"
         b = self.astbuilder
 
         # For array operands, load reads into registers, and store
@@ -381,6 +395,11 @@ class FinalSpecializer(BaseSpecializer):
             return self.visit(temp)
 
     def compute_temp_strides(self, variable, handle_inner_dim, tiled=False):
+        """
+        Compute the temporary strides needed for the strength reduction. These
+        should be small constants, so division should be fast. We could use
+        char * instead of element_type *, but it's nicer to avoid the casts.
+        """
         b = self.astbuilder
 
         if variable in self.strides:
@@ -411,6 +430,14 @@ class FinalSpecializer(BaseSpecializer):
 
     def compute_data_pointer(self, variable, argument_data_pointer,
                              handle_inner_dim, tiled):
+        """
+        Compute the data pointer for the dimension the variable is located in
+        (the loop level). This involves generating a strength reduction in
+        each outer dimension.
+
+        Variables referring to the same array may be found on different
+        loop levels.
+        """
         b = self.astbuilder
 
         assert variable.type.is_array
@@ -431,10 +458,12 @@ class FinalSpecializer(BaseSpecializer):
         temp = argument_data_pointer
         for_loops = self.function.for_loops[start:stop]
 
+        # Loop over all outer loop levels
         for i, for_node in zip(range(start, stop), for_loops):
             if for_node.dim < offset:
                 continue
 
+            # Allocate a temp_data_pointer on each outer loop level
             temp = b.temp(pointer_type)
             dim = for_node.dim - offset
 
@@ -447,6 +476,7 @@ class FinalSpecializer(BaseSpecializer):
                 outer_pointer = outer_pointers[-1]
                 may_reorder = False
 
+            # Generate: temp_data_pointer = outer_data_pointer
             assmt = b.assign(temp, outer_pointer, may_reorder=may_reorder)
             outer_node.prepending.stats.append(assmt)
 
@@ -457,10 +487,16 @@ class FinalSpecializer(BaseSpecializer):
                                         'specializer', self.sp)
 
             if for_node.is_controlling_loop:
+                # controlling loop for tiled specializations, multiply by the
+                # tiling blocksize for this dimension
                 stride = b.mul(stride, for_node.blocksize)
 
+            # Generate: temp_data_pointer += stride
             stat = b.assign(temp, b.add(temp, stride))
             if not outer_pointers:
+                # Outermost loop level, generate some additional OpenMP
+                # parallel-loop-compatible code
+                # Generate: temp_data_pointer = data_pointer + i * stride0
                 omp_body = b.assign(temp, b.add(outer_pointer,
                                                 b.mul(original_stride, for_node.index)))
                 for_node.prepending.stats.append(b.omp_if(omp_body))
@@ -474,46 +510,6 @@ class FinalSpecializer(BaseSpecializer):
             self.outer_pointers[variable].append(temp)
 
         return temp
-
-    def _compute_inner_dim_pointer(self, b, p, outer_pointer, loop_level,
-                                   variable, tiled):
-        """
-        Compute the pointer to each 'row'.
-
-        In the case of Fortran, offset strides by one, since we want all
-        strides but the first.
-        In the case of C, we want all strides except the last.
-
-        (indices is already offset through the strided_indices()
-        method)
-
-        arg: the array function argument
-        stats: list of statements we append to
-        """
-        b = self.astbuilder
-
-        indices = self.indices
-        if tiled:
-            # use all indices
-            ndim = variable.type.ndim
-            strides_offset = 0
-
-            if loop_level == len(self.function.for_loops):
-                indices = [self.index(loop_level - 2),
-                           self.function.lower_tiling_limits[1]]
-            else:
-                indices = [self.index(loop_level - 1)]
-        else:
-            ndim = variable.type.ndim - 1
-            strides_offset = self.order == 'F'
-            indices = [self.index(loop_level - 1)]
-
-        first_element_pointer = self._strided_element_location(
-            variable, indices=indices,
-            strides_index_offset=strides_offset,
-            ndim=ndim, pointer=p)
-
-        return b.assign(p, first_element_pointer.operand)
 
     def visit_FunctionNode(self, node):
         self.function = node
@@ -572,7 +568,7 @@ class FinalSpecializer(BaseSpecializer):
     def visit_BinopNode(self, node):
         type = self.get_type(node.type)
         if node.operator == '%' and type.is_float and not self.context.use_llvm:
-            # rewrite module for floats
+            # rewrite modulo for floats to fmod()
             b = self.astbuilder
             functype = minitypes.FunctionType(return_type=type,
                                               args=[type, type])
@@ -826,7 +822,8 @@ def get_any_array_argument(arguments):
 
 class CanVectorizeVisitor(minivisitor.TreeVisitor):
     """
-    Determines whether we can vectorize a given expression.
+    Determines whether we can vectorize a given expression. Currently only
+    support arithmetic on floats and doubles.
     """
 
     can_vectorize = True
@@ -871,6 +868,10 @@ class CanVectorizeVisitor(minivisitor.TreeVisitor):
         self.visitchildren(node)
 
 def visit_if_should_vectorize(func):
+    """
+    Visits the given method if we are vectorizing, otherwise visit the
+    superclass' method of :py:class:`VectorizingSpecialization`
+    """
     @functools.wraps(func)
     def wrapper(self, node):
         if self.should_vectorize:
@@ -884,7 +885,7 @@ class VectorizingSpecializer(Specializer):
     """
     Generate explicitly vectorized code if supported.
 
-    :param vector_size: number of 32-bit operands supported in the vector
+    :param vector_size: number of 32-bit operands in the vector
     """
 
     is_vectorizing_specializer = True
@@ -1525,6 +1526,10 @@ class FTiledStridedSpecializer(StridedFortranSpecializer,
 ### Vectorized specializer equivalents
 #
 def create_vectorized_specializers(specializer_cls):
+    """
+    Creates Vectorizing specializer classes from the given specializer for
+    SSE and AVX.
+    """
     bases = (VectorizingSpecializer, specializer_cls)
     d = dict(vectorized_equivalents=None)
     name = 'Vectorized%%d%s' % specializer_cls.__name__

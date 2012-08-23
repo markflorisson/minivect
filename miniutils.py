@@ -1,3 +1,7 @@
+"""
+Miscellaneous utilities.
+"""
+
 import __builtin__
 
 def any(it):
@@ -24,18 +28,8 @@ def min(it, key=None):
         return value
     return min(it)
 
-class Condition(object):
-    """
-    This wraps a condition so that it can be shared by everyone and modified
-    by whomever wants to.
-    """
-    def __init__(self, value):
-        self.value = value
-
-    def __nonzero__(self):
-        return self.value
-
 class ComparableObjectMixin(object):
+    "Make sure subclasses implement comparison and hashing methods"
 
     def __hash__(self):
         "Implement in subclasses"

@@ -1,3 +1,7 @@
+"""
+Define some errors that may be raised by the compiler.
+"""
+
 class Error(Exception):
     "Base exception class"
 

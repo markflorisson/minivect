@@ -107,7 +107,7 @@ class CCodeWriter(CodeWriter):
         return result
 
 def sub_tempita(s, context, file=None, name=None):
-    "Run tempita on string s with given context."
+    "Run the tempita template engine on string the given string."
     if not s:
         return None
 
@@ -122,13 +122,18 @@ def sub_tempita(s, context, file=None, name=None):
     return tempita.sub(s, **context)
 
 class TempitaCodeWriter(CodeWriter):
+    """
+    Code writer which supports writing Tempita strings. See
+    http://pythonpaste.org/tempita/ for documentation on Tempita.
+    """
+
     def putln(self, string, context_dict):
         self.write(sub_tempita(string) + '\n')
 
 class CodeFormatter(object):
     """
     Default code formatting, which returns the formatted code as a list
-    of objects (the ones written to the :py:class`CodeWriter`)
+    of objects (the ones written to the :py:class:`minivect.codegen.CodeWriter`)
     """
     def format(self, codewriter):
         return codewriter.buffer.getvalue()

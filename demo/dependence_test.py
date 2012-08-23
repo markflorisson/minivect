@@ -1,5 +1,6 @@
 """
-Determine dependencies between two arbitrary numpy arrays.
+Determine data dependences between two arbitrary numpy arrays.
+See thesis/thesis.pdf section 5.2.
 """
 
 import fractions
@@ -109,7 +110,7 @@ def dimensional_independence(a):
 
 def verify_dimensional_constraints(base, a, offsets, steps):
     for i, (offset, step) in enumerate(zip(offsets, steps)):
-        assert 0 <= offset + (a.shape[i] - 1) * step
+        assert 0 <= offset + (a.shape[i] - 1) * step < base.shape[i]
 
 def offsets(base, a):
     """

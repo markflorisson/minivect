@@ -1,3 +1,7 @@
+"""
+Generate LLVM code for a minivect AST.
+"""
+
 import sys
 
 try:
@@ -14,6 +18,12 @@ import minivisitor
 import ctypes_conversion
 
 class LLVMCodeGen(codegen.CodeGen):
+    """
+    Generate LLVM code for a minivect AST.
+
+    Takes a regular :py:class:`minivect.minicode.CodeWriter` to which it
+    writes the LLVM function and a ctypes function.
+    """
 
     in_lhs_expr = 0
 
@@ -33,12 +43,14 @@ class LLVMCodeGen(codegen.CodeGen):
         self.init_comparisons()
 
     def append_basic_block(self, name='unamed'):
+        "append a basic block and keep track of it"
         idx = len(self.blocks)
         bb = self.lfunc.append_basic_block('%s_%d' % (name, idx))
         self.blocks.append(bb)
         return bb
 
     def optimize(self):
+        "Run llvm optimizations on the generated LLVM code (using the old llvm-py)"
         llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
         for llvm_pass in self.context.llvm_passes():
             llvm_fpm.add(llvm_pass)
@@ -50,6 +62,7 @@ class LLVMCodeGen(codegen.CodeGen):
         # self.context.llvm_fpm.run(self.lfunc)
 
     def optimize(self):
+        "Run llvm optimizations on the generated LLVM code"
         llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
         # target_data = llvm.ee.TargetData(self.context.llvm_ee)
         llvm_fpm.add(self.context.llvm_ee.target_data)
@@ -87,6 +100,7 @@ class LLVMCodeGen(codegen.CodeGen):
         self.code.write(ctypes_func)
 
     def add_arguments(self, function):
+        "Insert function arguments into the symtab"
         i = 0
         for arg in function.arguments + function.scalar_arguments:
             for var in arg.variables:
@@ -104,6 +118,7 @@ class LLVMCodeGen(codegen.CodeGen):
         return node
 
     def visit_OpenMPConditionalNode(self, node):
+        "OpenMP is not yet implemented, only process the 'else' directives."
         if node.else_body:
             self.visit(node.else_body)
         return node
@@ -177,6 +192,10 @@ class LLVMCodeGen(codegen.CodeGen):
         return self.visit_PromotionNode(node)
 
     def visit_PromotionNode(self, node):
+        """
+        Handle promotions as inserted by
+        :py:class:`minivect.type_promoter.TypePromoter`
+        """
         result = self.visit(node.operand)
         type = node.type
         op_type = node.operand.type
@@ -213,6 +232,10 @@ class LLVMCodeGen(codegen.CodeGen):
         }
 
     def init_comparisons(self):
+        """
+        Define binary operation LLVM instructions. Do this in a function in
+        case llvm-py is not installed.
+        """
         self._compare_mapping_float = {
             '>':  llvm.core.FCMP_OGT,
             '<':  llvm.core.FCMP_OLT,
@@ -387,8 +410,8 @@ class LLVMCodeGen(codegen.CodeGen):
         return self.labels[node]
 
     def handle_string_constant(self, b, constant):
-        #lchar = minitypes.char.to_llvm(self.context)
-        #ltype = llvm.core.Type.array(lchar, len(constant) + 1)
+        # Create a global string constant, if it doesn't already
+        # Based on code in Numba. Seems easier than creating a stack variable
         string_constants = self.context.string_constants = getattr(
                                     self.context, 'string_constants', {})
         if constant in string_constants:

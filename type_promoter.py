@@ -1,3 +1,9 @@
+"""
+Promote and demote values of differing types in a minivect AST. This is run
+before code generation. In LLVM types need to be equivalent for binary
+operations.
+"""
+
 import sys
 import copy
 import functools

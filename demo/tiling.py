@@ -1,5 +1,6 @@
 """
-Simple algorithm to compute tiling parameters.
+Simple algorithm to compute tiling parameters. Based on the paper
+"Tile Size Selection Using Cache Organization and Data Layout".
 """
 
 import math

@@ -1,3 +1,8 @@
+"""
+Convert a miniast to an XML document using ElementTree. This allows us to
+write XPath unit tests, or just serialize the AST.
+"""
+
 try:
     from lxml import etree
     have_lxml = True

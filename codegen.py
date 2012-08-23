@@ -44,6 +44,15 @@ class CodeGen(minivisitor.TreeVisitor):
         return self.visit(node)
 
 class CodeGenCleanup(CodeGen):
+    """
+    Perform cleanup for all nodes. This is invoked from an appropriate clean-
+    up point from an :py:class:`minivect.miniast.ErrorHandler`. Recursion
+    should hence stop at ErrorHandler nodes, since an ErrorHandler descendant
+    should handle its own descendants.
+
+    Users of minivect should subclass this to DECREF object temporaries, etc.
+    """
+
     def visit_Node(self, node):
         self.visitchildren(node)
 
@@ -52,7 +61,7 @@ class CodeGenCleanup(CodeGen):
         pass
 
 def format_specifier(node, astbuilder):
-    "Return a printf() format specifier for the given type"
+    "Return a printf() format specifier for the type of the given AST node"
     type = node.type
 
     format = None
@@ -79,6 +88,11 @@ def format_specifier(node, astbuilder):
         raise minierror.UnmappableFormatSpecifierError(type)
 
 class CCodeGen(CodeGen):
+    """
+    Generates C code from an AST, needs a
+    :py:class:`minivect.minicode.CCodeWriter`. To use the vectorized
+    specializations, use the :py:class:`VectorCodeGen` below.
+    """
 
     label_counter = 0
     disposal_point = None
@@ -89,6 +103,7 @@ class CCodeGen(CodeGen):
         self.temp_names = set()
 
     def strip(self, expr_string):
+        # strip parentheses from C string expressions where unneeded
         if expr_string and expr_string[0] == '(' and expr_string[-1] == ')':
             return expr_string[1:-1]
         return expr_string
@@ -347,6 +362,10 @@ class CCodeGen(CodeGen):
 
 
 class VectorCodegen(CCodeGen):
+    """
+    Generate C code for vectorized ASTs. As a subclass of :py:class:`CCodeGen`,
+    can write C code for any minivect AST.
+    """
 
     types = {
         minitypes.VectorType(minitypes.float_, 4) : '_mm_%s_ps',

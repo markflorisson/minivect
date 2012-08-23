@@ -143,6 +143,7 @@ class HoistBroadcastingExpressions(specializers.BaseSpecializer):
         return node
 
     def _hoist_binop_operands(self, b, node):
+        # perform hoisitng. Does not handle all expressions correctly yet.
         if not node.lhs.hoistable or not node.rhs.hoistable:
             if node.lhs.hoistable:
                 node.lhs = self.hoist(node.lhs)

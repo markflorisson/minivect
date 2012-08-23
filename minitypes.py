@@ -54,6 +54,9 @@ else:
 
 class TypeMapper(object):
     """
+    Maps foreign types to minitypes. Users of minivect should implement
+    this and pass it to :py:class:`minivect.miniast.Context`.
+
     >>> import miniast
     >>> context = miniast.Context()
     >>> miniast.typemapper = TypeMapper(context)
@@ -109,6 +112,7 @@ class TypeMapper(object):
         self.context = context
 
     def map_type(self, opaque_type):
+        "Map a foreign type to a minitype"
         if opaque_type.is_int:
             return int_
         elif opaque_type.is_float:
@@ -178,6 +182,8 @@ class TypeMapper(object):
 
 def map_dtype(dtype):
     """
+    Map a NumPy dtype to a minitype.
+
     >>> _map_dtype(np.dtype(np.int32))
     int32
     >>> _map_dtype(np.dtype(np.int64))
@@ -297,6 +303,11 @@ class Type(miniutils.ComparableObjectMixin):
         return h
 
     def __getitem__(self, item):
+        """
+        Support array type creation by slicing, e.g. double[:, :] specifies
+        a 2D strided array of doubles. The syntax is the same as for
+        Cython memoryviews.
+        """
         assert isinstance(item, (tuple, slice))
 
         def verify_slice(s):

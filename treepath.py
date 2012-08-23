@@ -1,11 +1,11 @@
 """
+Taken from Cython/Compiler/TreePath.py
+
 A simple XPath-like language for tree traversal.
 
 This works by creating a filter chain of generator functions.  Each
 function selects a part of the expression, e.g. a child node, a
 specific descendant or a node that holds an attribute.
-
-Taken from Cython/Compiler/TreePath.py
 """
 
 import re

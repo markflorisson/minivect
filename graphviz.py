@@ -4,14 +4,7 @@ Visitor to generate a Graphviz .dot file with an AST representation.
 
 from pydot import pydot
 
-
 import minivisitor
-
-
-class Node(object):
-    def __init__(self, name, label):
-        self.name = name
-        self.label = label
 
 class GraphvizGenerator(minivisitor.PrintTree):
     """
@@ -59,7 +52,7 @@ class GraphvizGenerator(minivisitor.PrintTree):
         self.graph.add_edge(edge)
 
     def visit_Node(self, node, pydot_node=None):
-        "Visit children and add adges to their Graphviz nodes."
+        "Visit children and add edges to their Graphviz nodes."
         if pydot_node is None:
             pydot_node = self.create_node(node)
 
