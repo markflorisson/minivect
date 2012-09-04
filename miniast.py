@@ -390,11 +390,15 @@ class ASTBuilder(object):
         name = name or 'function'
         return self.function(name, body, args, shapevar=shapevar)
 
-    def funcarg(self, variable, *variables, **kwargs):
+    def funcarg(self, variable, *variables):
         """
         Create a (compound) function argument consisting of one or multiple
         argument Variables.
         """
+        if variable.type.is_array:
+            assert not variables
+            return self.array_funcarg(variable)
+
         if not variables:
             variables = [variable]
         return FunctionArgument(self.pos, variable, list(variables))

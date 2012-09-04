@@ -221,6 +221,35 @@ def map_dtype(dtype):
     elif dtype.kind == 'O':
         return object_
 
+def map_minitype_to_dtype(type):
+    import numpy as np
+
+    if type.is_array:
+        type = type.dtype
+
+    minitype2dtype = {
+        int8     : np.int8,
+        int16    : np.int16,
+        int32    : np.int32,
+        int64    : np.int64,
+        uint8    : np.uint8,
+        uint16   : np.uint16,
+        uint32   : np.uint32,
+        uint64   : np.uint64,
+
+        float_   : np.float32,
+        double   : np.float64,
+        longdouble: np.longdouble,
+
+        complex64: np.complex64,
+        complex128: np.complex128,
+        complex256: np.complex256,
+
+        object_: np.object,
+    }
+
+    return np.dtype(minitype2dtype[type])
+
 NONE_KIND = 0
 INT_KIND = 1
 FLOAT_KIND = 2
