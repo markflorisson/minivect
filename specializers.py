@@ -97,7 +97,8 @@ class BaseSpecializer(ASTMapper):
         """
         b = self.astbuilder
         node.body = b.stats(node.prepending, node.body, node.appending)
-        node.body = self.fuse_omp_stats(node.body)
+        if not self.context.use_llvm:
+            node.body = self.fuse_omp_stats(node.body)
 
     def fuse_omp_stats(self, node):
         """
@@ -345,7 +346,7 @@ class FinalSpecializer(BaseSpecializer):
             else:
                 element = self.element_location(data_pointer, for_node,
                                                 inner_contig, contig,
-                                                tiled=tiled)
+                                                tiled=tiled, variable=node)
                 return self.astbuilder.resolved_variable(
                                 node.name, node.type, element)
         else:
@@ -356,15 +357,34 @@ class FinalSpecializer(BaseSpecializer):
         return self.visit_Variable(vector_variable.variable)
 
     def element_location(self, data_pointer, for_node,
-                         inner_contig, is_contig, tiled):
+                         inner_contig, is_contig, tiled, variable):
         "Return the element in the array for the current index set"
+        b = self.astbuilder
+
+        def debug(item):
+            if self.context.debug_elements:
+                string = b.constant("Referenced element from %s:" %
+                                                        variable.name)
+                print_ = self.visit(b.print_(string, item))
+                for_node = self.function.for_loops[self.loop_level - 1]
+                for_node.prepending.stats.append(print_)
+
+                if not is_contig:
+                    print_steps = b.stats(*[
+                        b.print_(b.constant("%s step[%d]:" % (variable.name, i)),
+                                 self.strides[variable][i])
+                            for i in range(variable.type.ndim)])
+                    self.function.prepending.stats.append(self.visit(print_steps))
+
+            return item
+
         if inner_contig or is_contig:
             # contiguous access, index the data pointer in the inner dimension
-            return self.astbuilder.index(data_pointer, for_node.index)
+            return debug(b.index(data_pointer, for_node.index))
         else:
             # strided access, this dimension is performing strength reduction,
             # so we just need to dereference the data pointer
-            return self.astbuilder.dereference(data_pointer)
+            return debug(b.dereference(data_pointer))
 
     def handle_vector_variable(self, variable, data_pointer, for_node,
                                inner_contig, is_contig):

@@ -102,6 +102,7 @@ class Context(object):
     """
 
     debug = False
+    debug_elements = False
 
     use_llvm = False
     optimize_broadcasting = True
@@ -178,7 +179,9 @@ class Context(object):
 
     def debug_c(self, ast, specializer):
         "Generate C code (for debugging)"
-        result = CContext().run(ast, [specializer]).next()
+        context = CContext()
+        context.debug = self.debug
+        result = context.run(ast, [specializer]).next()
         _, specialized_ast, _, (proto, impl) = result
         return impl
 
@@ -401,7 +404,7 @@ class ASTBuilder(object):
         Create a (compound) function argument consisting of one or multiple
         argument Variables.
         """
-        if variable.type.is_array:
+        if variable.type is not None and variable.type.is_array:
             assert not variables
             return self.array_funcarg(variable)
 
@@ -1095,12 +1098,6 @@ class ForNode(Node):
         self.body = body
 
         self.index = index or init.lhs
-
-        # insertions of statements that happen during specialization somewhere
-        # down in the tree. Prepending statements are inserted before the loop
-        # body, appending ones after
-        self.prepending_stats = []
-        self.appending_stats = []
 
 class IfNode(Node):
     "An 'if' statement, see A for loop, see :py:class:`ASTBuilder.if_`"

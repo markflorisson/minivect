@@ -377,15 +377,11 @@ class LLVMCodeGen(codegen.CodeGen):
         return self.visit_SingleIndexNode(node)
 
     def visit_SizeofNode(self, node):
-        return self.visit(self.astbuilder.constant(node.type.itemsize))
+        return self.visit(self.astbuilder.constant(node.sizeof_type.itemsize))
 
     def visit_Variable(self, node):
         value = self.symtab[node.name]
         return value
-        if self.in_lhs_expr:
-            return value
-        else:
-            return self.builder.load(value)
 
     def visit_ArrayAttribute(self, node):
         return self.symtab[node.name]
