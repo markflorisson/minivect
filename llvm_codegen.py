@@ -165,6 +165,7 @@ class LLVMCodeGen(codegen.CodeGen):
         else:
             bb_false = bb_endif
 
+        test = self.visit(node.cond)
         self.builder.cbranch(test, bb_true, bb_false)
 
         # if cond

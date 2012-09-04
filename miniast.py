@@ -176,6 +176,12 @@ class Context(object):
             yield (pipeline[0], specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
 
+    def debug_c(self, ast, specializer):
+        "Generate C code (for debugging)"
+        result = CContext().run(ast, [specializer]).next()
+        _, specialized_ast, _, (proto, impl) = result
+        return impl
+
     def pipeline(self, specializer_class):
         # add specializer mixin and run specializer
         if self.specializer_mixin_cls:
