@@ -175,7 +175,7 @@ class TypeMapper(object):
             return object_
         elif type1.is_numeric and type2.is_numeric:
             return self.promote_numeric(type1, type2)
-        elif type1.is_array and type2:
+        elif type1.is_array and type2.is_array:
             return self.promote_arrays(type1, type2)
         else:
             raise minierror.UnpromotableTypeError((type1, type2))

@@ -63,11 +63,11 @@ cdef public bint is_broadcasting(list arrays, broadcast) except -1:
 
 cdef public inline int build_dynamic_args(
         list arrays, cnp.npy_intp *strides_list,
-        void ***data_pointers_out, cnp.npy_intp ***strides_list_out,
+        char ***data_pointers_out, cnp.npy_intp ***strides_list_out,
         int ndim) except -1:
 
-    cdef void **data_pointers = <void **> stdlib.malloc(len(arrays) *
-                                                        sizeof(void **))
+    cdef char **data_pointers = <char **> stdlib.malloc(len(arrays) *
+                                                        sizeof(char **))
     cdef cnp.npy_intp **strides_pointers = <cnp.npy_intp **> stdlib.malloc(
                                         len(arrays) * sizeof(cnp.npy_intp **))
     if data_pointers == NULL or strides_pointers == NULL:
@@ -77,7 +77,7 @@ cdef public inline int build_dynamic_args(
     cdef int i
 
     for i, array in enumerate(arrays):
-        data_pointers[i] = cnp.PyArray_DATA(array)
+        data_pointers[i] = <char *> cnp.PyArray_DATA(array)
         strides_pointers[i] = &strides_list[i * ndim]
 
     data_pointers_out[0] = data_pointers
