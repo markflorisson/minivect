@@ -421,7 +421,12 @@ class PointerType(Type):
         return "%s *%s" % (self.base_type, " ".join(self.qualifiers))
 
     def to_llvm(self, context):
-        return llvm.core.Type.pointer(self.base_type.to_llvm(context))
+        if self.base_type.is_void:
+            llvm_base_type = int_.to_llvm(context)
+        else:
+            llvm_base_type = self.base_type.to_llvm(context)
+
+        return llvm.core.Type.pointer(llvm_base_type)
 
 class CArrayType(Type):
     is_carray = True
@@ -551,6 +556,7 @@ class Py_ssize_t_Type(IntType):
 class NPyIntp(IntType):
     is_numpy_intp = True
     name = "npy_intp"
+    rank = 10
 
     def __init__(self, **kwds):
         super(NPyIntp, self).__init__(**kwds)

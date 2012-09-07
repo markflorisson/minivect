@@ -98,6 +98,10 @@ class Context(object):
         Visitor to generate a Graphviz graph. See the :py:module:`graphviz`
         module.
 
+    .. attribute: minifunction
+
+        The current minifunction that is being translated.
+
     Use subclass :py:class:`CContext` to get the defaults for C code generation.
     """
 
@@ -107,6 +111,7 @@ class Context(object):
     use_llvm = False
     optimize_broadcasting = True
 
+    astbuilder_cls = None
     codegen_cls = UndocClassAttribute(codegen.VectorCodegen)
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
     codewriter_cls = UndocClassAttribute(minicode.CodeWriter)
@@ -139,7 +144,7 @@ class Context(object):
             self.llvm_module = None
 
     def init(self):
-        self.astbuilder = ASTBuilder(self)
+        self.astbuilder = self.astbuilder_cls(self)
         self.typemapper = minitypes.TypeMapper(self)
 
     def run_opaque(self, astmapper, opaque_ast, specializers):
@@ -160,6 +165,7 @@ class Context(object):
             pipeline = self.pipeline(specializer_class)
 
             specialized_ast = specializers.specialize_ast(ast)
+            self.astbuilder.minifunction = specialized_ast
             for transform in pipeline:
                 specialized_ast = transform.visit(specialized_ast)
 
@@ -177,9 +183,11 @@ class Context(object):
             yield (pipeline[0], specialized_ast, codewriter,
                    self.codeformatter_cls().format(codewriter))
 
-    def debug_c(self, ast, specializer):
+    def debug_c(self, ast, specializer, astbuilder_cls=None):
         "Generate C code (for debugging)"
         context = CContext()
+        if astbuilder_cls:
+            context.astbuilder_cls = astbuilder_cls
         context.debug = self.debug
         result = context.run(ast, [specializer]).next()
         _, specialized_ast, _, (proto, impl) = result
@@ -305,6 +313,9 @@ class ASTBuilder(object):
     and which makes it convenient to build up complex ASTs concisely.
     """
 
+    shape_type = minitypes.Py_ssize_t.pointer()
+    strides_type = shape_type
+
     # the 'pos' attribute is set for each visit to each node by
     # the ASTMapper
     pos = None
@@ -330,12 +341,13 @@ class ASTBuilder(object):
     def create_function_type(self, function, strides_args=True):
         arg_types = []
         for arg in function.arguments + function.scalar_arguments:
-            if arg.type and arg.type.is_array and not strides_args:
-                arg_types.append(arg.data_pointer.type)
-                arg.variables = [arg.data_pointer]
-            else:
-                for variable in arg.variables:
-                    arg_types.append(variable.type)
+            if arg.used:
+                if arg.type and arg.type.is_array and not strides_args:
+                    arg_types.append(arg.data_pointer.type)
+                    arg.variables = [arg.data_pointer]
+                else:
+                    for variable in arg.variables:
+                        arg_types.append(variable.type)
 
         function.type = minitypes.FunctionType(
                     return_type=function.success_value.type, args=arg_types)
@@ -372,7 +384,8 @@ class ASTBuilder(object):
         arguments.insert(0, self.funcarg(shapevar))
         if posinfo:
             arguments.insert(1, posinfo)
-        body = self.nditerate(body)
+
+        body = self.stats(self.nditerate(body))
 
         error_value = self.constant(-1)
         success_value = self.constant(0)
@@ -383,6 +396,10 @@ class ASTBuilder(object):
                             error_value=error_value,
                             success_value=success_value,
                             omp_size=omp_size or self.constant(1024))
+
+        # prepending statements, used during specialization
+        function.prepending = self.stats()
+        function.body = self.stats(function.prepending, function.body)
 
         self.create_function_type(function)
         return function
@@ -524,14 +541,7 @@ class ASTBuilder(object):
         """
         Wrap a bunch of statements in an AST node.
         """
-        stats = []
-        for stat in statements:
-            if stat.is_statlist:
-                stats.extend(stat.stats)
-            else:
-                stats.append(stat)
-
-        return StatListNode(self.pos, stats)
+        return StatListNode(self.pos, list(statements))
 
     def expr_stat(self, expr):
         "Turn an expression into a statement"
@@ -557,7 +567,6 @@ class ASTBuilder(object):
     def promote(self, dst_type, node):
         "Promote or demote the node to the given dst_type"
         if node.type != dst_type:
-
             if node.is_constant and node.type.kind == dst_type.kind:
                 node.type = dst_type
                 return node
@@ -842,6 +851,95 @@ class ASTBuilder(object):
     def noop_expr(self):
         return NoopExpr(self.pos, type=None)
 
+class DynamicArgumentASTBuilder(ASTBuilder):
+    """
+    Create a function with a dynamic number of arguments. This means the
+    signature looks like
+
+        func(int *shape, float *data[n_ops], int *strides[n_ops])
+    """
+
+    def __init__(self, context):
+        super(DynamicArgumentASTBuilder, self).__init__(context)
+
+        # Argument array variable -> data pointer variable
+        self.data_pointers = {}
+
+        # Argument array variable -> data pointer variable
+        self.strides_pointers = {}
+
+    def data_pointer(self, variable):
+        if not hasattr(variable, 'data_pointer'):
+            temp =  self.temp(variable.type.dtype.pointer(),
+                              variable.name + "_data_temp")
+            variable.data_pointer = temp
+
+        return variable.data_pointer
+
+    def _create_data_pointer(self, function, argument, i):
+        variable = argument.variable
+
+        temp = self.data_pointer(variable)
+        p = self.index(function.data_pointers, self.constant(i))
+        p = self.cast(p, variable.type.dtype.pointer())
+        assmt = self.assign(temp, p)
+
+        function.body.stats.insert(0, assmt)
+        return temp
+
+    def stridesvar(self, variable):
+        "Return the strides variable for the given array operand"
+        if not hasattr(variable, 'strides_pointer'):
+            temp = self.temp(self.strides_type, variable.name + "_stride_temp")
+            variable.strides_pointer = temp
+
+        return variable.strides_pointer
+
+    def _create_strides_pointer(self, function, argument, i):
+        variable = argument.variable
+        temp = self.stridesvar(variable)
+        strides = self.index(function.strides_pointers, self.constant(i))
+        function.body.stats.insert(0, self.assign(temp, strides))
+        return temp
+
+    def function(self, name, body, args, shapevar=None, posinfo=None,
+                 omp_size=None):
+        function = super(DynamicArgumentASTBuilder, self).function(
+                        name, body, args, shapevar, posinfo, omp_size)
+
+        function.data_pointers = self.variable(
+                    minitypes.void.pointer().pointer(), 'data_pointers')
+        function.strides_pointers = self.variable(
+                    function.shape.type.pointer(), 'strides_pointer')
+
+        i = len(function.arrays) - 1
+        for argument in function.arrays[::-1]:
+            data_p = self._create_data_pointer(function, argument, i)
+            strides_p = self._create_strides_pointer(function, argument, i)
+
+            argument.data_pointer = data_p
+            argument.strides_pointer = strides_p
+
+            argument.used = False
+            i -= 1
+
+        argpos = 1
+        if posinfo:
+            argpos = 4
+
+        function.arguments.insert(argpos,
+                                  self.funcarg(function.strides_pointers))
+        function.arguments.insert(argpos,
+                                  self.funcarg(function.data_pointers))
+
+        self.create_function_type(function)
+        # print function.type
+        # print self.context.debug_c(
+        #        function, specializers.StridedSpecializer, type(self))
+        return function
+
+Context.astbuilder_cls = UndocClassAttribute(ASTBuilder)
+
 class Position(object):
     "Each node has a position which is an instance of this type."
 
@@ -875,6 +973,7 @@ class Node(miniutils.ComparableObjectMixin):
     is_sizeof = False
     is_variable = False
 
+    is_function = False
     is_funcarg = False
     is_array_funcarg = False
 
@@ -967,6 +1066,8 @@ class FunctionNode(Node):
         section. May be overridden at any time before specialization time.
     """
 
+    is_function = True
+
     child_attrs = ['body', 'arguments', 'scalar_arguments']
 
     def __init__(self, pos, name, body, arguments, scalar_arguments,
@@ -975,6 +1076,7 @@ class FunctionNode(Node):
         self.type = None # see ASTBuilder.create_function_type
         self.name = name
         self.body = body
+        self.arrays = [arg for arg in arguments if arg.type and arg.type.is_array]
         self.arguments = arguments
         self.scalar_arguments = scalar_arguments
         self.shape = shape
@@ -986,7 +1088,6 @@ class FunctionNode(Node):
         self.args = dict((v.name, v) for v in arguments)
         self.ndim = max(arg.type.ndim for arg in arguments
                                           if arg.type and arg.type.is_array)
-
 
 class FuncCallNode(ExprNode):
     """
@@ -1042,6 +1143,8 @@ class FunctionArgument(ExprNode):
     child_attrs = ['variables']
     if_funcarg = True
 
+    used = True
+
     def __init__(self, pos, variable, variables):
         super(FunctionArgument, self).__init__(pos, variable.type)
         self.variables = variables
@@ -1054,6 +1157,8 @@ class ArrayFunctionArgument(ExprNode):
 
     child_attrs = ['data_pointer', 'strides_pointer']
     is_array_funcarg = True
+
+    used = True
 
     def __init__(self, pos, type, data_pointer, strides_pointer, **kwargs):
         super(ArrayFunctionArgument, self).__init__(pos, type, **kwargs)

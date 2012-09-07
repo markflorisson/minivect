@@ -79,7 +79,6 @@ class BaseSpecializer(ASTMapper):
         self.visitchildren(node)
         return node
 
-
     def init_pending_stats(self, node):
         """
         Allow modifications while visiting some descendant of this node
@@ -87,8 +86,10 @@ class BaseSpecializer(ASTMapper):
         calls compute_inner_dim_pointer()
         """
         b = self.astbuilder
-        node.prepending, node.appending = b.stats(), b.stats()
-        node.body = b.stats(node.prepending, node.body, node.appending)
+
+        if not node.is_function:
+            node.prepending = b.stats()
+        node.appending = b.stats()
 
     def handle_pending_stats(self, node):
         """
@@ -96,7 +97,16 @@ class BaseSpecializer(ASTMapper):
         up in the AST.
         """
         b = self.astbuilder
-        node.body = b.stats(node.prepending, node.body, node.appending)
+
+        # self.visitchildren(node.prepending)
+        # self.visitchildren(node.appending)
+        if node.is_function:
+            # prepending is a StatListNode already part of the function body
+            # assert node.prepending in list(self.treepath(node, '//StatListNode'))
+            node.body = b.stats(node.body, node.appending)
+        else:
+            node.body = b.stats(node.prepending, node.body, node.appending)
+
         if not self.context.use_llvm:
             node.body = self.fuse_omp_stats(node.body)
 
@@ -129,7 +139,8 @@ class BaseSpecializer(ASTMapper):
             else:
                 stats.append(next_stat)
 
-        return b.stats(*stats)
+        node.stats[:] = stats
+        return node
 
     #
     ### Stubs for cooperative multiple inheritance
@@ -205,7 +216,7 @@ class Specializer(BaseSpecializer):
                     stats.append(b.print_(b.constant("data pointer %d:" % idx),
                                           arg.data_pointer))
 
-        node.body = b.stats(b.stats(*stats), node.body)
+        node.prepending.stats.append(b.stats(*stats))
 
     def visit_FunctionNode(self, node):
         """
@@ -441,8 +452,7 @@ class FinalSpecializer(BaseSpecializer):
                                  name="%s_stride%d" % (variable.name, dim))
 
             stat = b.assign(temp_stride,
-                            b.div(stride, b.sizeof(variable.type.dtype)),
-                            may_reorder=True)
+                            b.div(stride, b.sizeof(variable.type.dtype)))
             self.function.prepending.stats.append(stat)
             strides[dim] = temp_stride
 
@@ -490,14 +500,12 @@ class FinalSpecializer(BaseSpecializer):
             if not outer_pointers: #i == offset:
                 outer_node = self.function
                 outer_pointer = self.function.args[variable.name].data_pointer
-                may_reorder = True
             else:
                 outer_node = self.function.for_loops[i - 1]
                 outer_pointer = outer_pointers[-1]
-                may_reorder = False
 
             # Generate: temp_data_pointer = outer_data_pointer
-            assmt = b.assign(temp, outer_pointer, may_reorder=may_reorder)
+            assmt = b.assign(temp, outer_pointer)
             outer_node.prepending.stats.append(assmt)
 
             stride = original_stride = self.strides[variable][dim]
@@ -535,11 +543,9 @@ class FinalSpecializer(BaseSpecializer):
         self.function = node
         self.indices = self.sp.indices
         node = self.run_optimizations(node)
+
         self.init_pending_stats(node)
-        # node.prepending_stats = []
         self.visitchildren(node)
-        # node.prepending_stats.append(node.body)
-        # node.body = self.astbuilder.stats(*node.prepending_stats)
         self.handle_pending_stats(node)
 
         return node

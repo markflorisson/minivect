@@ -103,12 +103,16 @@ class LLVMCodeGen(codegen.CodeGen):
         "Insert function arguments into the symtab"
         i = 0
         for arg in function.arguments + function.scalar_arguments:
-            for var in arg.variables:
-                llvm_arg = self.lfunc.args[i]
-                self.symtab[var.name] = llvm_arg
-                llvm_arg.add_attribute(llvm.core.ATTR_NO_ALIAS)
-                llvm_arg.add_attribute(llvm.core.ATTR_NO_CAPTURE)
-                i += 1
+            if arg.used:
+                for var in arg.variables:
+                    llvm_arg = self.lfunc.args[i]
+                    self.symtab[var.name] = llvm_arg
+                    llvm_arg.add_attribute(llvm.core.ATTR_NO_ALIAS)
+                    llvm_arg.add_attribute(llvm.core.ATTR_NO_CAPTURE)
+                    i += 1
+            else:
+                for var in arg.variables:
+                    self.symtab[var.name] = self.visit(var)
 
     def visit_PrintNode(self, node):
         pass
@@ -186,9 +190,13 @@ class LLVMCodeGen(codegen.CodeGen):
         self.builder.ret(self.visit(node.operand))
 
     def visit_CastNode(self, node):
-        result = self.visit(node.operand)
         if node.type.is_pointer:
-            return result.bitcast(node.type)
+            result = self.visit(node.operand)
+            dest_type = node.type.to_llvm(self.context)
+            # print result, dest_type
+            # node.print_tree(self.context)
+            return self.builder.bitcast(result, dest_type)
+            # return result.bitcast(node.type)
 
         return self.visit_PromotionNode(node)
 
@@ -272,7 +280,7 @@ class LLVMCodeGen(codegen.CodeGen):
         if (node.type.is_int or node.type.is_float) and node.operator in self._binops:
             llvm_method_name = self._binops[op][node.type.is_int + node.type.is_signed]
             meth = getattr(self.builder, llvm_method_name)
-            if lhs.type != rhs.type:
+            if not lhs.type == rhs.type:
                 node.print_tree(self.context)
                 assert False, (node.lhs.type, node.rhs.type, lhs.type, rhs.type)
             return meth(lhs, rhs)
@@ -370,7 +378,7 @@ class LLVMCodeGen(codegen.CodeGen):
         if self.in_lhs_expr:
             return result
         else:
-           return self.builder.load(result)
+            return self.builder.load(result)
 
     def visit_DereferenceNode(self, node):
         node = self.astbuilder.index(node.operand, self.astbuilder.constant(0))
@@ -449,6 +457,9 @@ class LLVMCodeGen(codegen.CodeGen):
     def visit_FuncCallNode(self, node):
         llvm_args = self.results(node.args)
         llvm_func = self.visit(node.func_or_pointer)
+        for arg in llvm_args:
+            if 'undef' in str(arg):
+                print '!!!'
         return self.builder.call(llvm_func, llvm_args)
 
     def visit_FuncNameNode(self, node):

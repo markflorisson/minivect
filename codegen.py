@@ -118,6 +118,7 @@ class CCodeGen(CodeGen):
         node.mangled_name = name
 
         args = self.results(node.arguments + node.scalar_arguments)
+        args = (arg for arg in args if arg is not None)
         proto = "static int %s(%s)" % (name, ", ".join(args))
         code.proto_code.putln(proto + ';')
         code.putln("%s {" % proto)
@@ -133,11 +134,13 @@ class CCodeGen(CodeGen):
                              for v in variables if v is not None)
 
     def visit_FunctionArgument(self, node):
-        return self._argument_variables(node.variables)
+        if node.used:
+            return self._argument_variables(node.variables)
 
     def visit_ArrayFunctionArgument(self, node):
-        return self._argument_variables([node.data_pointer,
-                                         node.strides_pointer])
+        if node.used:
+            return self._argument_variables([node.data_pointer,
+                                             node.strides_pointer])
 
     def visit_StatListNode(self, node):
         self.visitchildren(node)
