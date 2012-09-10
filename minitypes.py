@@ -27,10 +27,12 @@ Traceback (most recent call last):
 InvalidTypeSpecification: Step may only be provided once, and only in the first or last dimension.
 """
 
-__all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'int_', 'long_', 'bool_', 'object_',
+__all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
+           'int_', 'uint', 'long_', 'ulong', 'longlong', 'ulonglong',
+           'size_t', 'npy_intp', 'c_string_type', 'bool_', 'object_',
            'float_', 'double', 'longdouble', 'float32', 'float64', 'float128',
            'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
-           'complex64', 'complex128', 'complex256', 'npy_intp']
+           'complex64', 'complex128', 'complex256']
 
 import sys
 import math
@@ -142,6 +144,8 @@ class TypeMapper(object):
             return int_
         elif isinstance(value, complex):
             return complex128
+        elif isinstance(value, str):
+            return c_string_type
         elif np and isinstance(value, np.ndarray):
             dtype = map_dtype(value.dtype)
             return ArrayType(dtype, value.ndim,
@@ -601,6 +605,7 @@ class FunctionType(Type):
     is_vararg = False
 
     def to_llvm(self, context):
+        assert self.return_type is not None
         return lc.Type.function(self.return_type.to_llvm(context),
                                 [arg_type.to_llvm(context)
                                     for arg_type in self.args],
