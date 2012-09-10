@@ -30,7 +30,8 @@ import copy
 try:
     import dot_parser
 except Exception, e:
-    print "Couldn't import dot_parser, loading of dot files will not be possible."
+    # print "Couldn't import dot_parser, loading of dot files will not be possible."
+    pass
 
 
 
