@@ -859,15 +859,6 @@ class DynamicArgumentASTBuilder(ASTBuilder):
         func(int *shape, float *data[n_ops], int *strides[n_ops])
     """
 
-    def __init__(self, context):
-        super(DynamicArgumentASTBuilder, self).__init__(context)
-
-        # Argument array variable -> data pointer variable
-        self.data_pointers = {}
-
-        # Argument array variable -> data pointer variable
-        self.strides_pointers = {}
-
     def data_pointer(self, variable):
         if not hasattr(variable, 'data_pointer'):
             temp =  self.temp(variable.type.dtype.pointer(),
