@@ -1,6 +1,12 @@
-cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
-                                 cnp.npy_intp **shape_out,
-                                 cnp.npy_intp **strides_out) except -1:
+from libc cimport stdlib
+cimport numpy as cnp
+
+cnp.import_array()
+
+cdef public int broadcast_arrays_generalized(
+        list arrays, tuple broadcast_shape, int ndim,
+        list core_dimensions, cnp.npy_intp **shape_out,
+        cnp.npy_intp **strides_out) except -1:
     """
     Broadcast the given arrays. Returns the total broadcast shape of size
     ndim in shape_out. Returns the strides for each array in strides_out
@@ -12,7 +18,7 @@ cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
           without leading zero strides.
     """
     cdef cnp.ndarray array
-    cdef int i, j, start, stop
+    cdef int i, j, start, stop, array_ndim, offset
 
     cdef cnp.npy_intp *shape = <cnp.npy_intp *> stdlib.malloc(
                                               ndim * sizeof(cnp.npy_intp))
@@ -29,18 +35,19 @@ cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
     # Build a strides list for all arrays of size ndim
     for i, array in enumerate(arrays):
         start = i * ndim
+        array_ndim = cnp.PyArray_NDIM(array) - core_dimensions[i]
+        offset = ndim - array_ndim
 
-        if array.ndim < ndim:
+        if array_ndim < ndim:
             # broadcast leading dimensions
-            for j in range(start, start + ndim - array.ndim):
+            for j in range(start, start + offset):
                 strides_list[j] = 0
-            start = j
 
-        for j in range(ndim):
+        for j in range(offset, ndim):
             if array.shape[j] == 1:
                 strides_list[start + j] = 0
             else:
-                strides_list[start + j] = cnp.PyArray_STRIDE(array, j)
+                strides_list[start + j] = cnp.PyArray_STRIDE(array, j - offset)
 
     # for j in range(ndim):
     #     print 'shape%d:' % j, shape[j]
@@ -52,6 +59,13 @@ cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
 
     shape_out[0] = shape
     strides_out[0] = strides_list
+    return 0
+
+cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
+                                 cnp.npy_intp **shape_out,
+                                 cnp.npy_intp **strides_out) except -1:
+    broadcast_arrays_generalized(arrays, broadcast_shape, ndim,
+                                 [0] * len(arrays), shape_out, strides_out)
     return 0
 
 cdef public bint is_broadcasting(list arrays, broadcast) except -1:
