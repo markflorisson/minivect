@@ -457,19 +457,18 @@ class LLVMCodeGen(codegen.CodeGen):
     def visit_FuncCallNode(self, node):
         llvm_args = self.results(node.args)
         llvm_func = self.visit(node.func_or_pointer)
-        for arg in llvm_args:
-            if 'undef' in str(arg):
-                print '!!!'
         return self.builder.call(llvm_func, llvm_args)
 
     def visit_FuncNameNode(self, node):
         try:
-            printf = self.context.llvm_module.get_function_named('printf')
+            func = self.context.llvm_module.get_function_named(node.name)
         except llvm.LLVMException:
+            # Define as external function
+            assert node.is_external
             func_type = node.type.to_llvm(self.context)
-            printf = self.context.llvm_module.add_function(func_type, node.name)
+            func = self.context.llvm_module.add_function(func_type, node.name)
 
-        return printf
+        return func
 
     def visit_FuncRefNode(self, node):
         raise NotImplementedError

@@ -110,6 +110,11 @@ class BaseSpecializer(ASTMapper):
         if not self.context.use_llvm:
             node.body = self.fuse_omp_stats(node.body)
 
+    def get_loop(self, loop_level):
+        if loop_level:
+            return self.function.for_loops[self.loop_level - 1]
+        return self.function
+
     def fuse_omp_stats(self, node):
         """
         Fuse consecutive OpenMPConditionalNodes.
@@ -636,11 +641,13 @@ class FinalSpecializer(BaseSpecializer):
         self.visitchildren(node)
 
         if self.context.use_llvm:
+            # Rewrite 'cond ? x : y' expressions to if/else statements
             b = self.astbuilder
             temp = b.temp(node.lhs.type, name='if_temp')
             stat = b.if_else(node.cond, b.assign(temp, node.lhs),
                                         b.assign(temp, node.rhs))
-            for_node = self.function.for_loops[self.loop_level - 1]
+
+            for_node = self.get_loop(self.loop_level)
             for_node.prepending.stats.append(stat)
 
             node = temp

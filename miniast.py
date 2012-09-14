@@ -462,11 +462,11 @@ class ASTBuilder(object):
         type = func_or_pointer.type
         if type.is_pointer:
             type = func_or_pointer.type.base_type
-        return FuncCallNode(self.pos, type,
+        return FuncCallNode(self.pos, type.return_type,
                             func_or_pointer=func_or_pointer, args=args)
 
-    def funcname(self, type, name):
-        return FuncNameNode(self.pos, type, name=name)
+    def funcname(self, type, name, is_external=True):
+        return FuncNameNode(self.pos, type, name=name, is_external=is_external)
 
     def nditerate(self, body):
         """
