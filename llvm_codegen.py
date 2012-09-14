@@ -42,6 +42,9 @@ class LLVMCodeGen(codegen.CodeGen):
         self.init_binops()
         self.init_comparisons()
 
+        # List of LLVM call instructions to inline
+        self.inline_calls = []
+
     def append_basic_block(self, name='unamed'):
         "append a basic block and keep track of it"
         idx = len(self.blocks)
@@ -63,6 +66,10 @@ class LLVMCodeGen(codegen.CodeGen):
 
     def optimize(self):
         "Run llvm optimizations on the generated LLVM code"
+        for call_instr in self.inline_calls:
+            # print 'inlining...', call_instr
+            llvm.core.inline_function(call_instr)
+
         llvm_fpm = llvm.passes.FunctionPassManager.new(self.llvm_module)
         # target_data = llvm.ee.TargetData(self.context.llvm_ee)
         llvm_fpm.add(self.context.llvm_ee.target_data)
@@ -457,7 +464,12 @@ class LLVMCodeGen(codegen.CodeGen):
     def visit_FuncCallNode(self, node):
         llvm_args = self.results(node.args)
         llvm_func = self.visit(node.func_or_pointer)
-        return self.builder.call(llvm_func, llvm_args)
+        llvm_call = self.builder.call(llvm_func, llvm_args)
+
+        if node.inline:
+            self.inline_calls.append(llvm_call)
+
+        return llvm_call
 
     def visit_FuncNameNode(self, node):
         try:

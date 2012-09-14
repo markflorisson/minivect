@@ -453,7 +453,7 @@ class ASTBuilder(object):
         "Print out all arguments to stdout"
         return PrintNode(self.pos, args=list(args))
 
-    def funccall(self, func_or_pointer, args):
+    def funccall(self, func_or_pointer, args, inline=False):
         """
         Generate a call to the given function (a :py:class:`FuncNameNode`) of
         :py:class:`minivect.minitypes.FunctionType` or a
@@ -463,7 +463,8 @@ class ASTBuilder(object):
         if type.is_pointer:
             type = func_or_pointer.type.base_type
         return FuncCallNode(self.pos, type.return_type,
-                            func_or_pointer=func_or_pointer, args=args)
+                            func_or_pointer=func_or_pointer, args=args,
+                            inline=inline)
 
     def funcname(self, type, name, is_external=True):
         return FuncNameNode(self.pos, type, name=name, is_external=is_external)
@@ -1085,6 +1086,7 @@ class FuncCallNode(ExprNode):
     Call a function given a pointer or its name (FuncNameNode)
     """
 
+    inline = False
     child_attrs = ['func_or_pointer', 'args']
 
 class FuncNameNode(ExprNode):
