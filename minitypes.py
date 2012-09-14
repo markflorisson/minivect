@@ -247,12 +247,14 @@ def map_minitype_to_dtype(type):
 
         complex64: np.complex64,
         complex128: np.complex128,
-        complex256: np.complex256,
+        complex256: getattr(np, 'complex256', None),
 
         object_: np.object,
     }
 
-    return np.dtype(minitype2dtype[type])
+    dtype = minitype2dtype[type]
+    assert dtype is not None, "dtype not supported in this numpy build"
+    return np.dtype(dtype)
 
 NONE_KIND = 0
 INT_KIND = 1
