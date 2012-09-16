@@ -111,6 +111,9 @@ class Context(object):
     use_llvm = False
     optimize_broadcasting = True
 
+    shape_type = minitypes.Py_ssize_t.pointer()
+    strides_type = shape_type
+
     astbuilder_cls = None
     codegen_cls = UndocClassAttribute(codegen.VectorCodegen)
     cleanup_codegen_cls = UndocClassAttribute(codegen.CodeGenCleanup)
@@ -186,8 +189,15 @@ class Context(object):
     def debug_c(self, ast, specializer, astbuilder_cls=None):
         "Generate C code (for debugging)"
         context = CContext()
+
         if astbuilder_cls:
             context.astbuilder_cls = astbuilder_cls
+        else:
+            context.astbuilder_cls = self.astbuilder_cls
+
+        context.shape_type = self.shape_type
+        context.strides_type = self.strides_type
+
         context.debug = self.debug
         result = context.run(ast, [specializer]).next()
         _, specialized_ast, _, (proto, impl) = result
@@ -313,9 +323,6 @@ class ASTBuilder(object):
     and which makes it convenient to build up complex ASTs concisely.
     """
 
-    shape_type = minitypes.Py_ssize_t.pointer()
-    strides_type = shape_type
-
     # the 'pos' attribute is set for each visit to each node by
     # the ASTMapper
     pos = None
@@ -372,7 +379,7 @@ class ASTBuilder(object):
                         arguments to the function ``(filename, lineno, column)``.
         """
         if shapevar is None:
-            shapevar = self.variable(minitypes.Py_ssize_t.pointer(), 'shape')
+            shapevar = self.variable(self.context.shape_type, 'shape')
 
         arguments, scalar_arguments = [], []
         for arg in args:
@@ -748,7 +755,7 @@ class ASTBuilder(object):
 
     def stridesvar(self, variable):
         "Return the strides variable for the given array operand"
-        return StridePointer(self.pos, minitypes.Py_ssize_t.pointer(), variable)
+        return StridePointer(self.pos, self.context.strides_type, variable)
 
     def stride(self, variable, index):
         "Return the stride of array operand `variable` at integer `index`"
@@ -886,7 +893,8 @@ class DynamicArgumentASTBuilder(ASTBuilder):
     def stridesvar(self, variable):
         "Return the strides variable for the given array operand"
         if not hasattr(variable, 'strides_pointer'):
-            temp = self.temp(self.strides_type, variable.name + "_stride_temp")
+            temp = self.temp(self.context.strides_type,
+                             variable.name + "_stride_temp")
             variable.strides_pointer = temp
 
         return variable.strides_pointer

@@ -1062,7 +1062,7 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
     on the 'order' attribute).
     """
 
-    specialization_name = "inner_contig_c"
+    specialization_name = "inner_contig"
     order = "C"
 
     is_inner_contig_specializer = True
@@ -1110,6 +1110,8 @@ class StridedCInnerContigSpecializer(OrderedSpecializer):
         temporary data pointer in the contiguous dimension.
         """
         b = self.astbuilder
+
+        assert not list(self.treepath(node, '//NDIterate'))
 
         original_expr = specialize_ast(node.body)
 
@@ -1352,7 +1354,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
     The blocksize may be overridden through the get_blocksize method, in
     a specializer subclass or mixin (see miniast.Context.specializer_mixin_cls).
     """
-    specialization_name = "tiled_c"
+    specialization_name = "tiled"
     order = "C"
     is_tiled_specializer = True
 
@@ -1373,6 +1375,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
         return self.function.ndim - 1 - 2, -1, -1
 
     def visit_NDIterate(self, node):
+        assert self.function.ndim >= 2
         return self._tile_in_two_dimensions(node)
 
     def _tile_in_two_dimensions(self, node):

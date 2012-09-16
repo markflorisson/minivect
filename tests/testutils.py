@@ -21,7 +21,10 @@ def getcontext():
     return miniast.CContext()
 
 def get_llvm_context():
-    return miniast.LLVMContext()
+    context = miniast.LLVMContext()
+    context.shape_type = minitypes.npy_intp.pointer()
+    context.strides_type = context.shape_type
+    return context
 
 def build_vars(*types):
     return [b.variable(type, 'op%d' % i) for i, type in enumerate(types)]

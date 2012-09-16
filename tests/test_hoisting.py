@@ -9,7 +9,7 @@ from testutils import *
 
 import pytest
 
-cinner = sps['inner_contig_c']
+cinner = sps['inner_contig']
 
 @pytest.mark.skipif('not xmldumper.have_lxml')
 def test_hoist():

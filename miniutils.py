@@ -14,11 +14,6 @@ from xmldumper import etree, tostring
 ### Convenience utilities
 #
 
-def build_function(context, variables, expr, name=None):
-    "Build a minivect function"
-    b = context.astbuilder
-    body = b.nditerate(expr)
-    return b.build_function(variables, body, name)
 
 def specialize(context, specializer_cls, ast, print_tree=False):
     "Specialize an AST with given specializer and compile"
@@ -41,7 +36,7 @@ class MiniFunction(object):
         self.context = context
         self.specializer = specializer
         self.variables = variables
-        self.minifunc = build_function(context, variables, expr, name)
+        self.minifunc = self.b.build_function(variables, expr, name)
         self.specialized_ast, (self.lfunc, self.ctypes_func) = specialize(
                                         context, specializer, self.minifunc)
 
@@ -68,6 +63,10 @@ class MiniFunction(object):
 
     def __call__(self, *args, **kwargs):
         import numpy as np
+
+        # print self.minifunc.ndim
+        # self.minifunc.print_tree(self.context)
+        print self.context.debug_c(self.minifunc, self.specializer)
 
         out = kwargs.pop('out', None)
         assert not kwargs, kwargs

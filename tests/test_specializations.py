@@ -7,31 +7,42 @@ def build_expr(type):
     expr = b.assign(out, b.add(v1, b.mul(v2, v3)))
     return vars, expr
 
-def build_kernels(specialization_name, **kw):
-    funcs = []
-    for ndim in range(1, 4):
-        vars, expr = build_expr(minitypes.ArrayType(float_, ndim, **kw))
-        funcs.append(MiniFunction(specialization_name, vars, expr))
+def build_kernel(specialization_name, ndim, **kw):
+    vars, expr = build_expr(minitypes.ArrayType(float_, ndim, **kw))
+    func = MiniFunction(specialization_name, vars, expr)
+    return func
 
-    return funcs
+def build_kernels(specialization_name, min_ndim=1, max_ndim=3, **kw):
+    return [build_kernel(specialization_name, ndim)
+                for ndim in range(min_ndim, max_ndim + 1)]
 
 arrays2d = [get_array(), get_array(), get_array()]
 arrays1d = [a[0] for a in arrays2d]
 arrays3d = [a[:, None, :] for a in arrays2d]
 arrays = [(arrays1d, arrays2d, arrays3d)]
 
-@pytest.mark.parametrize(("arrays", "specializer_names"),
-                         [(arrays, ['contig'])])
-def test_specializations(arrays, specializer_names):
-    """
-    >>> test_specializations(arrays, ['contig'])
-    contig
-    """
-    for name in specializer_names:
-        print name
-        f1d, f2d, f3d = build_kernels(name)
-        for (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) in arrays:
-            assert np.all(f1d(x1, y1, z1) == x1 + y1 * z1)
-            assert np.all(f2d(x2, y2, z2) == x2 + y2 * z2)
-            assert np.all(f3d(x3, y3, z3) == x3 + y3 * z3)
+def pytest_generate_tests(metafunc):
+    if metafunc.function is test_specializations:
+        specializations = [s for s in sps.keys()
+                               if not s.endswith(('_sse', '_avx'))]
+        metafunc.parametrize("arrays", arrays)
+        metafunc.parametrize("specialization_name", specializations)
+        metafunc.parametrize("ndim", range(1, 4))
 
+
+def test_specializations(arrays, specialization_name, ndim):
+    if 'tiled' in specialization_name and ndim < 2:
+        return
+
+    if 'fortran' in specialization_name:
+        arrays = [(x.T, y.T, z.T) for x, y, z in arrays]
+
+    func = build_kernel(specialization_name, ndim)
+    x, y, z = arrays[ndim - 1]
+
+    print x.strides, y.strides, z.strides
+    assert np.all(func(x, y, z) == x + y * z)
+
+specializations = [s for s in sps.keys()
+                       if not s.endswith(('_sse', '_avx'))]
+print specializations
