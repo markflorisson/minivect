@@ -453,7 +453,7 @@ class FinalSpecializer(BaseSpecializer):
 
         for dim in range(start, stop):
             stride = b.stride(variable, dim)
-            temp_stride = b.temp(stride.type.qualify("const"),
+            temp_stride = b.temp(stride.type.unqualify("const"),
                                  name="%s_stride%d" % (variable.name, dim))
 
             stat = b.assign(temp_stride,

@@ -467,6 +467,7 @@ class ASTBuilder(object):
                             inline=inline)
 
     def funcname(self, type, name, is_external=True):
+        assert type.is_function
         return FuncNameNode(self.pos, type, name=name, is_external=is_external)
 
     def nditerate(self, body):
