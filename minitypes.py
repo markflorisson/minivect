@@ -226,11 +226,8 @@ def map_dtype(dtype):
     elif dtype.kind == 'O':
         return object_
 
-def map_minitype_to_dtype(type):
+def create_dtypes():
     import numpy as np
-
-    if type.is_array:
-        type = type.dtype
 
     minitype2dtype = {
         int8     : np.int8,
@@ -246,16 +243,37 @@ def map_minitype_to_dtype(type):
         double   : np.float64,
         longdouble: np.longdouble,
 
+        short    : np.dtype('h'),
+        int_     : np.dtype('i'),
+        long_    : np.dtype('l'),
+        longlong : np.longlong,
+        ushort   : np.dtype('H'),
+        uint     : np.dtype('I'),
+        ulong    : np.dtype('L'),
+        ulonglong: np.ulonglong,
+
         complex64: np.complex64,
         complex128: np.complex128,
         complex256: getattr(np, 'complex256', None),
 
-        object_: np.object,
+        object_  : np.object,
     }
 
-    dtype = minitype2dtype[type]
+    return dict((k, np.dtype(v)) for k, v in minitype2dtype.iteritems())
+
+_dtypes = None
+def map_minitype_to_dtype(type):
+    global _dtypes
+
+    if _dtypes is None:
+        _dtypes = create_dtypes()
+
+    if type.is_array:
+        type = type.dtype
+
+    dtype = _dtypes[type]
     assert dtype is not None, "dtype not supported in this numpy build"
-    return np.dtype(dtype)
+    return dtype
 
 NONE_KIND = 0
 INT_KIND = 1

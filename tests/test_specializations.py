@@ -22,6 +22,10 @@ arrays3d = [a[:, None, :] for a in arrays2d]
 arrays = [(arrays1d, arrays2d, arrays3d)]
 
 def pytest_generate_tests(metafunc):
+    """
+    Generate tests, but skip vectorized versions (not supported for llvm
+    code backend yet)
+    """
     if metafunc.function is test_specializations:
         specializations = [s for s in sps.keys()
                                if not s.endswith(('_sse', '_avx'))]

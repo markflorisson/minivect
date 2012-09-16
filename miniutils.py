@@ -66,7 +66,7 @@ class MiniFunction(object):
 
         # print self.minifunc.ndim
         # self.minifunc.print_tree(self.context)
-        print self.context.debug_c(self.minifunc, self.specializer)
+        # print self.context.debug_c(self.minifunc, self.specializer)
 
         out = kwargs.pop('out', None)
         assert not kwargs, kwargs
