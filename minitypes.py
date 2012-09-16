@@ -188,15 +188,16 @@ def map_dtype(dtype):
     """
     Map a NumPy dtype to a minitype.
 
-    >>> _map_dtype(np.dtype(np.int32))
+    >>> import numpy as np
+    >>> map_dtype(np.dtype(np.int32))
     int32
-    >>> _map_dtype(np.dtype(np.int64))
+    >>> map_dtype(np.dtype(np.int64))
     int64
-    >>> _map_dtype(np.dtype(np.object))
+    >>> map_dtype(np.dtype(np.object))
     PyObject *
-    >>> _map_dtype(np.dtype(np.float64))
+    >>> map_dtype(np.dtype(np.float64))
     double
-    >>> _map_dtype(np.dtype(np.complex128))
+    >>> map_dtype(np.dtype(np.complex128))
     complex128
     """
     item_idx = int(math.log(dtype.itemsize, 2))

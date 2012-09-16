@@ -64,11 +64,16 @@ cdef public int broadcast_arrays_generalized(
 cdef public int broadcast_arrays(list arrays, tuple broadcast_shape, int ndim,
                                  cnp.npy_intp **shape_out,
                                  cnp.npy_intp **strides_out) except -1:
+    "Return the broadcast shape and strides as lists of npy_intp"
     broadcast_arrays_generalized(arrays, broadcast_shape, ndim,
                                  [0] * len(arrays), shape_out, strides_out)
     return 0
 
 cdef public bint is_broadcasting(list arrays, broadcast) except -1:
+    """
+    Check whether the an operand is broadcasting in the expression, given
+    a list of NumPy arrays and a NumPy broadcast object (np.broadcast).
+    """
     for array in arrays:
         if broadcast.nd != array.ndim or array.shape != broadcast.shape:
             return True
@@ -79,6 +84,17 @@ cdef public inline int build_dynamic_args(
         list arrays, cnp.npy_intp *strides_list,
         char ***data_pointers_out, cnp.npy_intp ***strides_list_out,
         int ndim) except -1:
+    """
+    Given a list of numpy arrays and broadcast strides, return a list of
+    data pointers and a list of stride pointers that can be used as dynamic
+    arguments. This means a minivect kernel can be invoked as follows:
+
+        kernel(shape, data_pointers, strides_pointers)
+
+    instead of passing in each data and stride pointer separately.
+
+    See :py:class:`minivect.miniast.DynamicArgumentASTBuilder`.
+    """
 
     cdef char **data_pointers = <char **> stdlib.malloc(len(arrays) *
                                                         sizeof(char **))

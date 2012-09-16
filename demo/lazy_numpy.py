@@ -72,7 +72,7 @@ class Lazy(object):
 
         # print specialize_c(specializer, func)[1]
         # print specialized_func.print_tree(context)
-        print llvm_func
+        # print llvm_func
 
         return ctypes_func, variables, specializer, llvm_func
 

@@ -859,6 +859,9 @@ class DynamicArgumentASTBuilder(ASTBuilder):
     signature looks like
 
         func(int *shape, float *data[n_ops], int *strides[n_ops])
+
+    To create minivect kernels supporting this signature, set the
+    astbuilder_cls attribute of Context to this class.
     """
 
     def data_pointer(self, variable):

@@ -7,6 +7,11 @@ NOTE: most of the tests are part of Cython:
 
 from testutils import *
 
+import pytest
+
+cinner = sps['inner_contig_c']
+
+@pytest.mark.skipif('not xmldumper.have_lxml')
 def test_hoist():
     """
     >> test_hoist()
@@ -58,7 +63,6 @@ def test_hoist_3d():
     func = build_function(vars, body)
 
     result_ast, code_output = specialize(cinner, func)
-    print code_output
 
 
 if __name__ == '__main__':

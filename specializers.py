@@ -1166,7 +1166,7 @@ class StrengthReducingStridedSpecializer(StridedCInnerContigSpecializer):
     inner dimension by adding the stride to the data pointer in each iteration.
     """
 
-    specialization_name = "strength_reduced_strided"
+    specialization_name = "strided"
     order = "C"
 
     is_strided_specializer = True
@@ -1231,7 +1231,7 @@ class StrengthReducingStridedFortranSpecializer(
     reduction in the inner dimension.
     """
 
-    specialization_name = "strength_reduced_strided_fortran"
+    specialization_name = "strided_fortran"
     order = "F"
 
     vectorized_equivalents = None
@@ -1576,3 +1576,22 @@ StridedCInnerContigSpecializer.vectorized_equivalents = (
                 create_vectorized_specializers(StridedCInnerContigSpecializer))
 StridedFortranInnerContigSpecializer.vectorized_equivalents = (
                 create_vectorized_specializers(StridedFortranInnerContigSpecializer))
+
+#
+### Create cict of all specializers
+#
+_specializer_list = [
+    ContigSpecializer,
+    StridedCInnerContigSpecializer, StridedFortranInnerContigSpecializer,
+    StridedSpecializer, StridedFortranSpecializer,
+    CTiledStridedSpecializer, FTiledStridedSpecializer,
+]
+
+specializers = {}
+
+for sp in _specializer_list:
+    specializers[sp.specialization_name] = sp
+    vectorizers = getattr(sp, 'vectorized_equivalents', None)
+    if vectorizers:
+        specializers[sp.specialization_name + '_sse'] = vectorizers[0]
+        specializers[sp.specialization_name + '_avx'] = vectorizers[1]
