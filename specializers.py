@@ -386,10 +386,13 @@ class FinalSpecializer(BaseSpecializer):
                 for_node.prepending.stats.append(print_)
 
                 if not is_contig:
-                    print_steps = b.stats(*[
-                        b.print_(b.constant("%s step[%d]:" % (variable.name, i)),
-                                 self.strides[variable][i])
-                            for i in range(variable.type.ndim)])
+                    stats = []
+                    for i, stride in enumerate(self.strides[variable]):
+                        if stride is not None:
+                            string = b.constant("%s step[%d]:" % (variable.name, i))
+                            stats.append(b.print_(string, stride))
+
+                    print_steps = b.stats(*stats)
                     self.function.prepending.stats.append(self.visit(print_steps))
 
             return item
