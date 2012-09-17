@@ -5,6 +5,9 @@ Define some errors that may be raised by the compiler.
 class Error(Exception):
     "Base exception class"
 
+    def __repr__(self):
+        return '%s()' % type(self).__name__
+
 class InferTypeError(Error):
     "Raised when types of values cannot be inferred"
 

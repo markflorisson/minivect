@@ -492,7 +492,7 @@ class NamedType(Type):
     def __repr__(self):
         if self.qualifiers:
             return "%s %s" % (self.name, " ".join(self.qualifiers))
-        return self.name
+        return str(self.name)
 
 class BoolType(NamedType):
     is_bool = True

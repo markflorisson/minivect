@@ -45,7 +45,7 @@ get_best_order(PyArrayObject *array, int ndim)
 
     for (j = 0; j < ndim; j++) {
         if (shape[j] != 1) {
-            f_stride = PyArray_STRIDE(array, i);
+            f_stride = PyArray_STRIDE(array, j);
             break;
         }
     }

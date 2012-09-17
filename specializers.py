@@ -1368,7 +1368,7 @@ class CTiledStridedSpecializer(StridedSpecializer):
         Get the tile size. Override in subclasses to provide e.g. parametric
         tiling.
         """
-        return self.astbuilder.constant(128)
+        return self.astbuilder.constant(64)
 
     def tiled_order(self):
         "Tile in the last two dimensions"
