@@ -37,6 +37,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
 import sys
 import math
 import ctypes
+import textwrap
 
 try:
     import llvm.core
@@ -389,6 +390,9 @@ class Type(miniutils.ComparableObjectMixin):
             verify_slice(item)
             return ArrayType(self, 1, is_c_contig=bool(item.step))
 
+    def declare(self):
+        return str(self)
+
     def to_llvm(self, context):
         "Get a corresponding llvm type from this type"
         return context.to_llvm(self)
@@ -543,10 +547,24 @@ class IntType(NumericType):
             assert self.itemsize == 8, self
             return lc.Type.int(64)
 
+    def declare(self):
+        if self.name.endswith(('16', '32', '64')):
+            return self.name + "_t"
+        else:
+            return str(self)
+
 class FloatType(NumericType):
     is_float = True
 
     kind = FLOAT_KIND
+
+    def declare(self):
+        if self.itemsize == 4:
+            return "float"
+        elif self.itemsize == 8:
+            return "double"
+        else:
+            return str(self)
 
     @property
     def comparison_type_list(self):
@@ -720,6 +738,40 @@ complex128 = ComplexType(name="complex128", base_type=float64,
                          rank=18, itemsize=16)
 complex256 = ComplexType(name="complex256", base_type=float128,
                          rank=20, itemsize=32)
+
+def get_utility():
+    import numpy
+
+    return textwrap.dedent("""\
+    #include <stdint.h>
+
+    #ifndef HAVE_LONGDOUBLE
+        #define HAVE_LONGDOUBLE %d
+    #endif
+
+    typedef struct {
+        float real;
+        float imag;
+    } complex64;
+
+    typedef struct {
+        double real;
+        double imag;
+    } complex128;
+
+    #if HAVE_LONGDOUBLE
+    typedef struct {
+        long double real;
+        long double imag;
+    } complex256;
+    #endif
+
+    typedef float float32;
+    typedef double float64;
+    #if HAVE_LONGDOUBLE
+    typedef long double float128;
+    #endif
+    """ % hasattr(numpy, 'complex256'))
 
 if __name__ == '__main__':
     import doctest
