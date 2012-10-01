@@ -36,6 +36,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
 
 import sys
 import math
+import copy
 import ctypes
 import textwrap
 
@@ -437,6 +438,16 @@ class ArrayType(Type):
             axes[0] = "::1"
 
         return "%s[%s]" % (self.dtype, ", ".join(axes))
+
+    @property
+    def strided(self):
+        type = copy.copy(self)
+        type.is_c_contig = False
+        type.is_f_contig = False
+        type.inner_contig = False
+        type.broadcasting = None
+        return type
+
 
 class PointerType(Type):
     is_pointer = True
