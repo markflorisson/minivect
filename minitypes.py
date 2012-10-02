@@ -404,6 +404,19 @@ class Type(miniutils.ComparableObjectMixin):
         return getattr(type(self), attr)
 
 class ArrayType(Type):
+    """
+    An array type. ArrayType may be sliced to obtain a subtype:
+
+    >>> double[:, :, ::1][1:]
+    double[:, ::1]
+    >>> double[:, :, ::1][:-1]
+    double[:, :]
+
+    >>> double[::1, :, :][:-1]
+    double[::1, :]
+    >>> double[::1, :, :][1:]
+    double[:, :]
+    """
 
     is_array = True
     subtypes = ['dtype']
@@ -446,6 +459,35 @@ class ArrayType(Type):
         type.is_f_contig = False
         type.inner_contig = False
         type.broadcasting = None
+        return type
+
+    def __getitem__(self, index):
+        assert isinstance(index, slice)
+        assert index.step is None
+        assert index.start is not None or index.stop is not None
+
+        start = 0
+        stop = self.ndim
+        if index.start is not None:
+            start = index.start
+        if index.stop is not None:
+            stop = index.stop
+
+        ndim = len(range(self.ndim)[start:stop])
+
+        if ndim == 0:
+            type = self.dtype
+        elif ndim > 0:
+            type = self.strided
+            type.ndim = ndim
+            type.is_c_contig = self.is_c_contig and stop == self.ndim
+            type.is_f_contig = self.is_f_contig and start == 0
+            type.inner_contig = type.is_c_contig or type.is_f_contig
+            if type.broadcasting:
+                type.broadcasting = self.broadcasting[start:stop]
+        else:
+            raise IndexError(index, ndim)
+
         return type
 
 

@@ -4,7 +4,6 @@ Miscellaneous (convenience) utilities.
 
 import __builtin__
 
-import minitypes
 import treepath
 from ctypes_conversion import get_data_pointer
 import xmldumper
@@ -72,6 +71,7 @@ class MiniFunction(object):
         assert not kwargs, kwargs
 
         if out is None:
+            import minitypes
             dtype = minitypes.map_minitype_to_dtype(self.variables[0].type)
             broadcast = np.broadcast(*args)
             out = np.empty(broadcast.shape, dtype=dtype)
