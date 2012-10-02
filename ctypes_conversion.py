@@ -6,10 +6,26 @@ ctypes function.
 import math
 import ctypes
 
-import minitypes
-
 def convert_to_ctypes(type):
-    "Convert the minitype to a ctypes type"
+    """
+    Convert the minitype to a ctypes type
+
+    >>> from minitypes import *
+    >>> assert convert_to_ctypes(int32) == ctypes.c_int32
+    >>> assert convert_to_ctypes(int64) == ctypes.c_int64
+    >>> assert convert_to_ctypes(uint32) == ctypes.c_uint32
+    >>> assert convert_to_ctypes(uint64) == ctypes.c_uint64
+    >>> assert convert_to_ctypes(short) == ctypes.c_short
+    >>> assert convert_to_ctypes(int_) == ctypes.c_int
+    >>> assert convert_to_ctypes(long_) == ctypes.c_long
+    >>> assert convert_to_ctypes(float_) == ctypes.c_float
+    >>> assert convert_to_ctypes(double) == ctypes.c_double
+    >>> #convert_to_ctypes(complex64)
+    >>> #convert_to_ctypes(complex128)
+    >>> #convert_to_ctypes(complex256)
+    """
+    import minitypes
+
     if type.is_pointer:
         return ctypes.POINTER(convert_to_ctypes(type.base_type))
     elif type.is_object or type.is_array:
@@ -26,9 +42,18 @@ def convert_to_ctypes(type):
             return ctypes.c_int32
         else:
             return ctypes.c_int64
+    elif type == minitypes.int_:
+        return ctypes.c_int
+    elif type == minitypes.uint:
+        return ctypes.c_uint
+    elif type == minitypes.long_:
+        return ctypes.c_long
+    elif type == minitypes.ulong:
+        return ctypes.c_ulong
+    # TODO: short, long long, etc
     elif type.is_int:
-        item_idx = int(math.log(type.itemsize))
-        if type.is_signed:
+        item_idx = int(math.log(type.itemsize, 2))
+        if type.signed:
             values = [ctypes.c_int8, ctypes.c_int16, ctypes.c_int32,
                       ctypes.c_int64]
         else:
@@ -36,6 +61,7 @@ def convert_to_ctypes(type):
                       ctypes.c_uint64]
         return values[item_idx]
     elif type.is_complex:
+        raise NotImplementedError
         if type.itemsize == 8:
             return Complex64
         elif type.itemsize == 16:
@@ -49,8 +75,6 @@ def convert_to_ctypes(type):
         arg_types = tuple(convert_to_ctypes(arg_type)
                               for arg_type in type.args)
         return ctypes.CFUNCTYPE(return_type, *arg_types)
-    elif type.is_py_ssize_t:
-        return getattr(ctypes, 'c_uint%d' % (_ext.sizeof_py_ssize_t() * 8))
     elif type.is_void:
         return None
     elif type.is_carray:
@@ -72,3 +96,7 @@ def get_data_pointer(numpy_array, array_type):
 def get_pointer(context, llvm_func):
     "Get a pointer to the LLVM function (int)"
     return context.llvm_ee.get_pointer_to_function(llvm_func)
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
