@@ -520,7 +520,7 @@ class CArrayType(Type):
         self.size = size
 
     def __repr__(self):
-        return "%s[%d]" % (self.base_type, self.length)
+        return "%s[%d]" % (self.base_type, self.size)
 
     def to_llvm(self, context):
         return llvm.core.Type.array(self.base_type.to_llvm(context), self.size)

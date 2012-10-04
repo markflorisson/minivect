@@ -61,13 +61,13 @@ def convert_to_ctypes(type):
                       ctypes.c_uint64]
         return values[item_idx]
     elif type.is_complex:
-        raise NotImplementedError
+        import complex_support
         if type.itemsize == 8:
-            return Complex64
+            return complex_support.Complex64
         elif type.itemsize == 16:
-            return Complex128
+            return complex_support.Complex128
         else:
-            return Complex256
+            return complex_support.Complex256
     elif type.is_c_string:
         return ctypes.c_char_p
     elif type.is_function:
