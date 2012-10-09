@@ -53,8 +53,11 @@ class Complex128(ctypes.Structure, ComplexMixin):
     _fields_ = [('real', ctypes.c_double), ('imag', ctypes.c_double)]
     _numpy_ty_ = np.complex128
 
-class Complex256(ctypes.Structure, ComplexMixin):
-    _fields_ = [('real', ctypes.c_longdouble), ('imag', ctypes.c_longdouble)]
-    _numpy_ty_ = np.complex256
+if hasattr(np, 'complex256'):
+    class Complex256(ctypes.Structure, ComplexMixin):
+        _fields_ = [('real', ctypes.c_longdouble), ('imag', ctypes.c_longdouble)]
+        _numpy_ty_ = np.complex256
+else:
+    Complex256 = None
 
 ### End Taken from Numba ###
