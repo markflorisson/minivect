@@ -37,6 +37,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
 import sys
 import math
 import copy
+import struct
 import ctypes
 import textwrap
 
@@ -55,6 +56,10 @@ if sys.maxint > 2**33:
 else:
     _plat_bits = 32
 
+if struct.pack('i', 1)[0] == '\1':
+    nbo = '<' # little endian
+else:
+    nbo = '>' # big endian
 
 class TypeMapper(object):
     """
@@ -205,6 +210,12 @@ def map_dtype(dtype):
     >>> map_dtype(np.dtype(np.complex128))
     complex128
     """
+    import numpy as np
+
+    if dtype.byteorder not in ('=', nbo) and dtype.kind in ('iufbc'):
+        raise minierror.UnmappableTypeError(
+                "Only native byteorder is supported", dtype)
+
     item_idx = int(math.log(dtype.itemsize, 2))
     if dtype.kind == 'i':
         return [int8, int16, int32, int64][item_idx]
@@ -228,6 +239,10 @@ def map_dtype(dtype):
             return complex128
         elif dtype.itemsize == 32:
             return complex256
+    elif dtype.kind == 'V':
+        fields = [(name, map_dtype(dtype.fields[name][0]))
+                      for name in dtype.names]
+        return struct(fields, packed=not dtype.isalignedstruct)
     elif dtype.kind == 'O':
         return object_
 
@@ -269,6 +284,13 @@ def create_dtypes():
 _dtypes = None
 def map_minitype_to_dtype(type):
     global _dtypes
+
+    if type.is_struct:
+        import numpy as np
+
+        fields = [(field_name, map_minitype_to_dtype(field_type))
+                      for field_name, field_type in type.fields]
+        return np.dtype(fields, align=not type.packed)
 
     if _dtypes is None:
         _dtypes = create_dtypes()
@@ -400,6 +422,9 @@ class Type(miniutils.ComparableObjectMixin):
     def to_llvm(self, context):
         "Get a corresponding llvm type from this type"
         return context.to_llvm(self)
+
+    def get_dtype(self):
+        return map_minitype_to_dtype(self)
 
     def __getattr__(self, attr):
         if attr.startswith('is_'):
@@ -830,6 +855,11 @@ class struct(Type):
 
         return lstruct([field_type.to_llvm(context)
                            for field_name, field_type in self.fields])
+
+    @property
+    def comparison_type_list(self):
+        return self.fields
+
 #
 ### Internal types
 #
