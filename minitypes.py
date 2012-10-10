@@ -32,7 +32,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
            'size_t', 'npy_intp', 'c_string_type', 'bool_', 'object_',
            'float_', 'double', 'longdouble', 'float32', 'float64', 'float128',
            'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
-           'complex64', 'complex128', 'complex256']
+           'complex64', 'complex128', 'complex256', 'struct']
 
 import sys
 import math
@@ -721,6 +721,7 @@ class VectorType(Type):
                 element_type.itemsize in (4, 8)), element_type
         self.element_type = element_type
         self.vector_size = vector_size
+        self.itemsize = element_type.itemsize * vector_size
 
     def to_llvm(self, context):
         return lc.Type.vector(self.element_type.to_llvm(context),
@@ -742,6 +743,86 @@ class VectorType(Type):
                 return '__m128i'
             else:
                 raise NotImplementedError
+
+def _sort_key(keyvalue):
+    field_name, field_type = keyvalue
+    if field_type.is_complex:
+        return field_type.base_type.rank * 2
+    elif field_type.is_numeric or field_type.is_struct:
+        return field_type.rank
+    elif field_type.is_vector:
+        return _sort_key(field_type.element_type) * field_type.vector_size
+    elif field_type.is_array:
+        return _sort_key(field_type.base_type) * field_type.size
+    elif field_type.is_pointer or field_type.is_object or field_type.is_array:
+        return 8
+    else:
+        return 1
+
+def sort_types(types_dict):
+    # reverse sort on rank, forward sort on name
+    d = {}
+    for field in types_dict.iteritems():
+        key = _sort_key(field)
+        d.setdefault(key, []).append(field)
+
+    def key(keyvalue):
+        field_name, field_type = keyvalue
+        return field_name
+
+    fields = []
+    for rank in sorted(d, reverse=True):
+        fields.extend(sorted(d[rank], key=key))
+
+    return fields
+
+
+    # forward sort on name
+
+
+    return sorted(fields, key=key)
+
+class struct(Type):
+    """
+    Create a struct type. Fields may be ordered or unordered. Unordered fields
+    will be ordered from big types to small types (for better alignment).
+
+    >>> struct([('a', int_), ('b', float_)], name='Foo') # ordered struct
+    struct Foo { int a, float b }
+    >>> struct(a=int_, b=float_, name='Foo') # unordered struct
+    struct Foo { float b, int a }
+    >>> struct(a=int32, b=int32, name='Foo') # unordered struct
+    struct Foo { int32 a, int32 b }
+
+    >>> struct(a=complex128, b=complex64, c=struct(f1=double, f2=double, f3=int32))
+    struct { struct { double f1, double f2, int32 f3 } c, complex128 a, complex64 b }
+    """
+
+    is_struct = True
+
+    def __init__(self, fields=None, name=None, readonly=False, **kwargs):
+        super(struct, self).__init__()
+        if fields and kwargs:
+            raise minierror.InvalidTypeSpecification(
+                    "The struct must be either ordered or unordered")
+
+        if kwargs:
+            fields = sort_types(kwargs)
+
+        self.fields = fields
+        self.rank = sum(_sort_key(field) for field in fields)
+        self.name = name
+        self.readonly = readonly
+
+    def __repr__(self):
+        if self.name:
+            name = self.name + ' '
+        else:
+            name = ''
+        return 'struct %s{ %s }' % (
+                name, ", ".join("%s %s" % (field_type, field_name)
+                                    for field_name, field_type in self.fields))
+
 
 #
 ### Internal types
