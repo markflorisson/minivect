@@ -270,6 +270,8 @@ class Context(object):
 
     def promote_types(self, type1, type2):
         "Promote types in an arithmetic operation"
+        if type1 == type2:
+            return type1
         return self.typemapper.promote_types(type1, type2)
 
     def getchildren(self, node):

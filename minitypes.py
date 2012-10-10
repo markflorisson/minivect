@@ -173,6 +173,7 @@ class TypeMapper(object):
 
     def promote_types(self, type1, type2):
         "Promote two arbitrary types"
+        string_types = c_string_type, char.pointer()
         if type1.is_pointer and type2.is_int_like:
             return type1
         elif type2.is_pointer and type2.is_int_like:
@@ -183,6 +184,8 @@ class TypeMapper(object):
             return self.promote_numeric(type1, type2)
         elif type1.is_array and type2.is_array:
             return self.promote_arrays(type1, type2)
+        elif type1 in string_types and type2 in string_types:
+            return c_string_type
         else:
             raise minierror.UnpromotableTypeError((type1, type2))
 
@@ -776,12 +779,6 @@ def sort_types(types_dict):
 
     return fields
 
-
-    # forward sort on name
-
-
-    return sorted(fields, key=key)
-
 class struct(Type):
     """
     Create a struct type. Fields may be ordered or unordered. Unordered fields
@@ -800,7 +797,7 @@ class struct(Type):
 
     is_struct = True
 
-    def __init__(self, fields=None, name=None, readonly=False, **kwargs):
+    def __init__(self, fields=None, name=None, readonly=False, packed=False, **kwargs):
         super(struct, self).__init__()
         if fields and kwargs:
             raise minierror.InvalidTypeSpecification(
@@ -813,6 +810,8 @@ class struct(Type):
         self.rank = sum(_sort_key(field) for field in fields)
         self.name = name
         self.readonly = readonly
+        self.fielddict = dict(fields)
+        self.packed = packed
 
     def __repr__(self):
         if self.name:
@@ -823,7 +822,14 @@ class struct(Type):
                 name, ", ".join("%s %s" % (field_type, field_name)
                                     for field_name, field_type in self.fields))
 
+    def to_llvm(self, context):
+        if self.packed:
+            lstruct = llvm.core.Type.packed_struct
+        else:
+            lstruct = llvm.core.Type.struct
 
+        return lstruct([field_type.to_llvm(context)
+                           for field_name, field_type in self.fields])
 #
 ### Internal types
 #
