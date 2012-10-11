@@ -37,7 +37,7 @@ __all__ = ['Py_ssize_t', 'void', 'char', 'uchar', 'short', 'ushort',
 import sys
 import math
 import copy
-import struct
+import struct as struct_
 import ctypes
 import textwrap
 
@@ -56,7 +56,7 @@ if sys.maxint > 2**33:
 else:
     _plat_bits = 32
 
-if struct.pack('i', 1)[0] == '\1':
+if struct_.pack('i', 1)[0] == '\1':
     nbo = '<' # little endian
 else:
     nbo = '>' # big endian
@@ -873,17 +873,20 @@ Py_ssize_t = Py_ssize_t_Type()
 npy_intp = NPyIntp()
 size_t = IntType(name="size_t", rank=8.5, itemsize=8, signed=False)
 char = CharType(name="char")
-short = IntType(name="short", rank=2, itemsize=2)
-int_ = IntType(name="int", rank=4, itemsize=4)
-long_ = IntType(name="long", rank=5, itemsize=4)
-longlong = IntType(name="PY_LONG_LONG", rank=8, itemsize=8)
+short = IntType(name="short", rank=2, itemsize=struct_.calcsize('h'))
+int_ = IntType(name="int", rank=4, itemsize=struct_.calcsize('i'))
+long_ = IntType(name="long", rank=5, itemsize=struct_.calcsize('l'))
+longlong = IntType(name="PY_LONG_LONG", rank=8, itemsize=struct_.calcsize('q'))
 
 uchar = CharType(name="unsigned char", signed=False)
-ushort = IntType(name="unsigned short", rank=2.5, itemsize=2, signed=False)
-uint = IntType(name="unsigned int", rank=4.5, itemsize=4, signed=False)
-ulong = IntType(name="unsigned long", rank=5.5, itemsize=4, signed=False)
-ulonglong = IntType(name="unsigned PY_LONG_LONG", rank=8.5, itemsize=8,
-                    signed=False)
+ushort = IntType(name="unsigned short", rank=2.5,
+                 itemsize=struct_.calcsize('H'), signed=False)
+uint = IntType(name="unsigned int", rank=4.5,
+               itemsize=struct_.calcsize('I'), signed=False)
+ulong = IntType(name="unsigned long", rank=5.5,
+                itemsize=struct_.calcsize('L'), signed=False)
+ulonglong = IntType(name="unsigned PY_LONG_LONG", rank=8.5,
+                    itemsize=struct_.calcsize('Q'), signed=False)
 
 bool_ = BoolType()
 object_ = ObjectType()
@@ -900,7 +903,7 @@ uint64 = IntType(name="uint64", rank=8.5, signed=False, itemsize=8)
 
 float32 = float_ = FloatType(name="float", rank=10, itemsize=4)
 float64 = double = FloatType(name="double", rank=12, itemsize=8)
-float128 = longdouble = FloatType(name="long double", rank=14, itemsize=16)
+float128 = longdouble = FloatType(name="long double", rank=14,itemsize=16)
 
 complex64 = ComplexType(name="complex64", base_type=float32,
                         rank=16, itemsize=8)
