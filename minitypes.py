@@ -423,6 +423,10 @@ class Type(miniutils.ComparableObjectMixin):
         "Get a corresponding llvm type from this type"
         return context.to_llvm(self)
 
+    def to_ctypes(self):
+        import ctypes_conversion
+        return ctypes_conversion.convert_to_ctypes(self)
+
     def get_dtype(self):
         return map_minitype_to_dtype(self)
 

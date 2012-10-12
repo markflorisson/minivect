@@ -80,7 +80,7 @@ def convert_to_ctypes(type):
     elif type.is_carray:
         return convert_to_ctypes(type.base_type) * type.size
     elif type.is_struct:
-        class Struct(object):
+        class Struct(ctypes.Structure):
             _fields_ = [(field_name, convert_to_ctypes(field_type))
                             for field_name, field_type in type.fields]
         return Struct
