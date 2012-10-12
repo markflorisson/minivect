@@ -426,6 +426,9 @@ class Type(miniutils.ComparableObjectMixin):
     def get_dtype(self):
         return map_minitype_to_dtype(self)
 
+    def is_string(self):
+        return self.is_c_string or self == char.pointer()
+
     def __getattr__(self, attr):
         if attr.startswith('is_'):
             return False
