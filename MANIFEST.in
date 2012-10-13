@@ -1,0 +1,5 @@
+include *.ini LICENSE README* *.in
+recursive-include demo *.py
+recursive-include doc *.py *Make* *make* *.rst
+recursive-include bench *
+recursive-include thesis *

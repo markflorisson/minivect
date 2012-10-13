@@ -33,7 +33,7 @@ setup(
         "Topic :: Software Development :: Compilers",
     ],
     description = "Compiler backend for array expressions",
-    packages = ['minivect', 'minivect.pydot'],
+    packages = ['minivect', 'minivect.pydot', 'minivect.tests'],
     package_data = {
         'minivect' : ['include/*'],
     },
