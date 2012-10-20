@@ -342,9 +342,9 @@ class ASTBuilder(object):
     def _infer_type(self, value):
         "Used to infer types for self.constant()"
         if isinstance(value, (int, long)):
-            return minitypes.IntType()
+            return minitypes.long_
         elif isinstance(value, float):
-            return minitypes.FloatType()
+            return minitypes.double
         elif isinstance(value, str):
             return minitypes.CStringType()
         else:
