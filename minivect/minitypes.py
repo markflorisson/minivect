@@ -165,7 +165,7 @@ class TypeMapper(object):
         "Promote two array types in an expression to a new array type"
         equal_ndim = type1.ndim == type2.ndim
         return ArrayType(self.promote_types(type1.dtype, type2.dtype),
-                         ndim=miniutils.max(type1.ndim, type2.ndim),
+                         ndim=miniutils.max((type1.ndim, type2.ndim)),
                          is_c_contig=(equal_ndim and type1.is_c_contig and
                                       type2.is_c_contig),
                          is_f_contig=(equal_ndim and type1.is_f_contig and
@@ -207,7 +207,7 @@ def map_dtype(dtype):
     """
     import numpy as np
 
-    if dtype.byteorder not in ('=', nbo) and dtype.kind in ('iufbc'):
+    if dtype.byteorder not in ('=', nbo, '|') and dtype.kind in ('iufbc'):
         raise minierror.UnmappableTypeError(
                 "Only native byteorder is supported", dtype)
 
@@ -237,7 +237,9 @@ def map_dtype(dtype):
     elif dtype.kind == 'V':
         fields = [(name, map_dtype(dtype.fields[name][0]))
                       for name in dtype.names]
-        return struct(fields, packed=not dtype.isalignedstruct)
+        is_aligned = dtype.alignment != 1
+        return struct(fields, packed=not getattr(dtype, 'isalignedstruct',
+                                                 is_aligned))
     elif dtype.kind == 'O':
         return object_
 
@@ -362,6 +364,9 @@ class Type(miniutils.ComparableObjectMixin):
     def comparison_type_list(self):
         return self.subtype_list
 
+    def _is_object(self, context):
+        return context.is_object(self)
+
     def __eq__(self, other):
         # Don't use isinstance here, compare on exact type to be consistent
         # with __hash__. Override where sensible
@@ -432,6 +437,11 @@ class Type(miniutils.ComparableObjectMixin):
         if attr.startswith('is_'):
             return False
         return getattr(type(self), attr)
+
+    def __call__(self, *args):
+        """Return a FunctionType with return_type and args set
+        """
+        return FunctionType(self, args)
 
 class ArrayType(Type):
     """
@@ -576,6 +586,8 @@ class NamedType(Type):
     def __eq__(self, other):
         return isinstance(other, NamedType) and self.name == other.name
 
+    __hash__ = Type.__hash__ # !@#$ py3k
+
     def __repr__(self):
         if self.qualifiers:
             return "%s %s" % (self.name, " ".join(self.qualifiers))
@@ -616,8 +628,15 @@ class IntType(NumericType):
     signed = True
     rank = 4
     itemsize = 4
+    typecode = None
 
     kind = INT_KIND
+
+    def __init__(self, typecode=None, **kwds):
+        super(IntType, self).__init__(**kwds)
+        self.typecode = typecode
+        if typecode is not None:
+            self.itemsize = struct_.calcsize(typecode)
 
     def to_llvm(self, context):
         if self.itemsize == 1:
@@ -677,7 +696,7 @@ class Py_ssize_t_Type(IntType):
 
     def __init__(self, **kwds):
         super(Py_ssize_t_Type, self).__init__(**kwds)
-        self.itemsize = _plat_bits / 8
+        self.itemsize = getsize('c_ssize_t', _plat_bits // 8)
 
 class NPyIntp(IntType):
     is_numpy_intp = True
@@ -720,13 +739,25 @@ class ObjectType(Type):
     def __repr__(self):
         return "PyObject *"
 
+def pass_by_ref(type):
+    return type.is_struct or type.is_complex
+
 class FunctionType(Type):
     subtypes = ['return_type', 'args']
     is_function = True
     is_vararg = False
 
+    struct_by_reference = False
+
+    def __init__(self, return_type, args, name=None, **kwds):
+        super(FunctionType, self).__init__(**kwds)
+        self.return_type = return_type
+        self.args = args
+        self.name = name
+
     def to_llvm(self, context):
         assert self.return_type is not None
+        self = self.actual_signature
         return lc.Type.function(self.return_type.to_llvm(context),
                                 [arg_type.to_llvm(context)
                                     for arg_type in self.args],
@@ -736,8 +767,39 @@ class FunctionType(Type):
         args = map(str, self.args)
         if self.is_vararg:
             args.append("...")
+        if self.name:
+            namestr = self.name + ' '
+        else:
+            namestr = ''
+        return "%s%s (*)(%s)" % (namestr, self.return_type, ", ".join(args))
 
-        return "%s (*)(%s)" % (self.return_type, ", ".join(args))
+    @property
+    def actual_signature(self):
+        """
+        Passing structs by value is not properly supported for different
+        calling conventions in LLVM, so we take an extra argument
+        pointing to a caller-allocated struct value.
+        """
+        if self.struct_by_reference:
+            args = []
+            for arg in self.args:
+                if pass_by_ref(arg):
+                    arg = arg.pointer()
+                args.append(arg)
+
+            return_type = self.return_type
+            if pass_by_ref(self.return_type):
+                return_type = void
+                args.append(self.return_type.pointer())
+
+            self = FunctionType(return_type, args)
+
+        return self
+
+    @property
+    def struct_return_type(self):
+        # Function returns a struct.
+        return self.return_type.pointer()
 
 class VectorType(Type):
     subtypes = ['element_type']
@@ -773,8 +835,8 @@ class VectorType(Type):
             else:
                 raise NotImplementedError
 
-def _sort_key(keyvalue):
-    field_name, field_type = keyvalue
+
+def _sort_types_key(field_type):
     if field_type.is_complex:
         return field_type.base_type.rank * 2
     elif field_type.is_numeric or field_type.is_struct:
@@ -787,6 +849,10 @@ def _sort_key(keyvalue):
         return 8
     else:
         return 1
+
+def _sort_key(keyvalue):
+    field_name, field_type = keyvalue
+    return _sort_types_key(field_type)
 
 def sort_types(types_dict):
     # reverse sort on rank, forward sort on name
@@ -861,6 +927,12 @@ class struct(Type):
     def comparison_type_list(self):
         return self.fields
 
+def getsize(ctypes_name, default):
+    try:
+        ctypes.sizeof(getattr(ctypes, ctypes_name))
+    except (ImportError, AttributeError):
+        return default
+
 #
 ### Internal types
 #
@@ -870,29 +942,29 @@ void = VoidType()
 #
 ### Public types
 #
-Py_ssize_t = Py_ssize_t_Type()
-
 try:
     npy_intp = NPyIntp()
 except ImportError:
     npy_intp = None
 
-size_t = IntType(name="size_t", rank=8.5, itemsize=8, signed=False)
-char = CharType(name="char")
-short = IntType(name="short", rank=2, itemsize=struct_.calcsize('h'))
-int_ = IntType(name="int", rank=4, itemsize=struct_.calcsize('i'))
-long_ = IntType(name="long", rank=5, itemsize=struct_.calcsize('l'))
-longlong = IntType(name="PY_LONG_LONG", rank=8, itemsize=struct_.calcsize('q'))
+Py_ssize_t = Py_ssize_t_Type()
 
-uchar = CharType(name="unsigned char", signed=False)
+
+size_t = IntType(name="size_t", rank=8.5,
+                 itemsize=getsize('c_size_t', _plat_bits / 8), signed=False)
+char = CharType(name="char", typecode='b')
+short = IntType(name="short", rank=2, typecode='h')
+int_ = IntType(name="int", rank=4, typecode='i')
+long_ = IntType(name="long", rank=5, typecode='l')
+longlong = IntType(name="PY_LONG_LONG", rank=8, typecode='q')
+
+uchar = CharType(name="unsigned char", signed=False, typecode='B')
 ushort = IntType(name="unsigned short", rank=2.5,
-                 itemsize=struct_.calcsize('H'), signed=False)
-uint = IntType(name="unsigned int", rank=4.5,
-               itemsize=struct_.calcsize('I'), signed=False)
-ulong = IntType(name="unsigned long", rank=5.5,
-                itemsize=struct_.calcsize('L'), signed=False)
+                 typecode='H', signed=False)
+uint = IntType(name="unsigned int", rank=4.5, typecode='I', signed=False)
+ulong = IntType(name="unsigned long", rank=5.5, typecode='L', signed=False)
 ulonglong = IntType(name="unsigned PY_LONG_LONG", rank=8.5,
-                    itemsize=struct_.calcsize('Q'), signed=False)
+                    typecode='Q', signed=False)
 
 bool_ = BoolType()
 object_ = ObjectType()
@@ -918,6 +990,32 @@ complex128 = ComplexType(name="complex128", base_type=float64,
                          rank=18, itemsize=16)
 complex256 = ComplexType(name="complex256", base_type=float128,
                          rank=20, itemsize=32)
+
+integral = []
+native_integral = []
+floating = []
+complextypes = []
+
+for typename in __all__:
+    minitype = globals()[typename]
+    if minitype is None:
+        continue
+
+    if minitype.is_int:
+        integral.append(minitype)
+    elif minitype.is_float:
+        floating.append(minitype)
+    elif minitype.is_complex:
+        complextypes.append(minitype)
+
+numeric = integral + floating + complextypes
+native_integral.extend((Py_ssize_t, size_t))
+
+integral.sort(key=_sort_types_key)
+native_integral = [minitype for minitype in integral
+                                if minitype.typecode is not None]
+floating.sort(key=_sort_types_key)
+complextypes.sort(key=_sort_types_key)
 
 def get_utility():
     import numpy
