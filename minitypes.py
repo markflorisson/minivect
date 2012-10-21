@@ -929,8 +929,8 @@ class struct(Type):
 
 def getsize(ctypes_name, default):
     try:
-        return ctypes.sizeof(getattr(ctypes, ctypes_name))
-    except ImportError:
+        ctypes.sizeof(getattr(ctypes, ctypes_name))
+    except (ImportError, AttributeError):
         return default
 
 #
