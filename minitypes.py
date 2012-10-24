@@ -824,6 +824,7 @@ class FunctionType(Type):
         func, = args
         return Function(self, func)
 
+
 class VectorType(Type):
     subtypes = ['element_type']
     is_vector = True
@@ -956,8 +957,8 @@ class struct(Type):
 
 def getsize(ctypes_name, default):
     try:
-        return ctypes.sizeof(getattr(ctypes, ctypes_name))
-    except ImportError:
+        ctypes.sizeof(getattr(ctypes, ctypes_name))
+    except (ImportError, AttributeError):
         return default
 
 #
@@ -1025,6 +1026,9 @@ complextypes = []
 
 for typename in __all__:
     minitype = globals()[typename]
+    if minitype is None:
+        continue
+
     if minitype.is_int:
         integral.append(minitype)
     elif minitype.is_float:
